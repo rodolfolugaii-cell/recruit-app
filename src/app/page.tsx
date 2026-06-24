@@ -19,7 +19,7 @@ export default function Home() {
           </Link>
           
           <Link 
-            href="/dashboard" 
+            href="/login" 
             className="block w-full bg-gray-100 text-gray-700 py-3 rounded-lg font-medium hover:bg-gray-200 transition-colors"
           >
             I am a Recruiter (Dashboard)
