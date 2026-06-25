@@ -17,11 +17,7 @@ export default function LoginForm() {
     setErrorMsg(null);
 
     try {
-      const { error } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
-
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
       if (error) throw error;
       router.push("/dashboard");
     } catch (error: any) {
@@ -32,49 +28,64 @@ export default function LoginForm() {
   };
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 p-4 text-gray-900">
-      <div className="max-w-md w-full bg-white rounded-xl shadow-md border border-gray-100 p-8 space-y-6">
-        
-        <div className="text-center space-y-2">
-          <h1 className="text-2xl font-bold text-gray-800">Recruiter Portal</h1>
-          <p className="text-sm text-gray-500">Please sign in to access candidate profiles</p>
+    <div
+      className="min-h-screen flex flex-col items-center justify-center p-4 relative"
+      style={{
+        backgroundImage: "url('/hk-bg.png')",
+        backgroundSize: "cover",
+        backgroundPosition: "center",
+        backgroundAttachment: "fixed",
+      }}
+    >
+      {/* Dark overlay */}
+      <div className="absolute inset-0 bg-black/55" />
+
+      {/* Login Card */}
+      <div className="relative z-10 max-w-md w-full bg-white/10 backdrop-blur-md border border-white/20 rounded-2xl shadow-2xl p-8 space-y-6">
+
+        <div className="text-center space-y-1">
+          <div className="w-12 h-12 bg-blue-600 rounded-full flex items-center justify-center text-white font-bold text-lg mx-auto mb-3">
+            HT
+          </div>
+          <h1 className="text-2xl font-bold text-white">Recruiter Portal</h1>
+          <p className="text-sm text-white/60">Sign in to access candidate profiles</p>
         </div>
 
         {errorMsg && (
-          <div className="bg-red-50 text-red-600 p-3 rounded-lg text-sm font-medium border border-red-100">
+          <div className="bg-red-500/20 text-red-200 p-3 rounded-lg text-sm font-medium border border-red-400/30">
             {errorMsg}
           </div>
         )}
 
         <form onSubmit={handleLogin} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700">Email Address</label>
-            <input 
-              type="email" 
+            <label className="block text-sm font-medium text-white/80 mb-1">Email Address</label>
+            <input
+              type="email"
               required
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              className="mt-1 block w-full rounded-md border border-gray-300 p-2.5 text-sm focus:border-blue-500 focus:outline-none bg-white text-gray-900" 
+              className="block w-full rounded-lg border border-white/20 bg-white/10 text-white placeholder-white/40 p-2.5 text-sm focus:border-blue-400 focus:outline-none focus:bg-white/15"
               placeholder="you@company.com"
             />
           </div>
 
           <div>
-            <label className="block text-sm font-medium text-gray-700">Password</label>
-            <input 
-              type="password" 
+            <label className="block text-sm font-medium text-white/80 mb-1">Password</label>
+            <input
+              type="password"
               required
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="mt-1 block w-full rounded-md border border-gray-300 p-2.5 text-sm focus:border-blue-500 focus:outline-none bg-white text-gray-900" 
+              className="block w-full rounded-lg border border-white/20 bg-white/10 text-white placeholder-white/40 p-2.5 text-sm focus:border-blue-400 focus:outline-none focus:bg-white/15"
               placeholder="••••••••"
             />
           </div>
 
-          <button 
-            type="submit" 
+          <button
+            type="submit"
             disabled={loading}
-            className="w-full bg-blue-600 text-white py-3 rounded-lg font-medium text-sm hover:bg-blue-700 transition-colors focus:outline-none disabled:bg-gray-400"
+            className="w-full bg-blue-600 text-white py-3 rounded-lg font-medium text-sm hover:bg-blue-500 transition-colors focus:outline-none disabled:bg-gray-500 mt-2"
           >
             {loading ? "Signing in..." : "Sign In"}
           </button>
