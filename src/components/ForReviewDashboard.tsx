@@ -24,11 +24,11 @@ interface Applicant {
   };
 }
 
-export default function RecruiterDashboard() {
+export default function ForReviewDashboard() {
   const [applicants, setApplicants] = useState<Applicant[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedApplicant, setSelectedApplicant] = useState<Applicant | null>(null);
-  const [sendingId, setSendingId] = useState<string | null>(null);
+  const [movingBackId, setMovingBackId] = useState<string | null>(null);
 
   useEffect(() => {
     async function fetchApplicants() {
@@ -36,11 +36,11 @@ export default function RecruiterDashboard() {
         const { data, error } = await supabase
           .from("applicants")
           .select("*")
+          .eq("status", "For Review")
           .order("created_at", { ascending: false });
 
         if (error) throw error;
-        // Exclude applicants already sent for review
-        setApplicants((data || []).filter(a => a.status !== "For Review"));
+        setApplicants(data || []);
       } catch (error: any) {
         console.error("Error fetching data:", error.message);
       } finally {
@@ -51,33 +51,32 @@ export default function RecruiterDashboard() {
     fetchApplicants();
   }, []);
 
-  const handleSendForReview = async (id: string, e: React.MouseEvent) => {
-    e.stopPropagation(); // prevent card click / modal from opening
-    setSendingId(id);
+  const handleMoveBack = async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setMovingBackId(id);
     try {
       const { error } = await supabase
         .from("applicants")
-        .update({ status: "For Review" })
+        .update({ status: "New" })
         .eq("id", id);
       if (error) throw error;
-      // Remove from this view immediately
       setApplicants(prev => prev.filter(a => a.id !== id));
     } catch (err: any) {
-      alert("Failed to send for review: " + err.message);
+      alert("Failed to move back: " + err.message);
     } finally {
-      setSendingId(null);
+      setMovingBackId(null);
     }
   };
 
   if (loading) {
-    return <div className="text-center py-12 text-gray-500">Loading submissions...</div>;
+    return <div className="text-center py-12 text-gray-500">Loading candidates for review...</div>;
   }
 
   return (
     <div>
       {applicants.length === 0 ? (
         <div className="text-center py-12 bg-white rounded-lg border border-gray-200 p-8 text-gray-500">
-          No new submissions. All candidates may have been sent for review!
+          No candidates are pending review. Send some from the Candidates page to get started.
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
@@ -85,7 +84,7 @@ export default function RecruiterDashboard() {
             <div
               key={applicant.id}
               onClick={() => setSelectedApplicant(applicant)}
-              className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden flex flex-col hover:shadow-md transition-shadow cursor-pointer"
+              className="bg-white rounded-xl border border-amber-200 shadow-sm overflow-hidden flex flex-col hover:shadow-md transition-shadow cursor-pointer"
             >
               <div className="p-6 flex items-start space-x-4 border-b border-gray-100">
                 <div className="w-20 h-20 bg-gray-100 rounded-lg overflow-hidden flex-shrink-0 border">
@@ -101,8 +100,8 @@ export default function RecruiterDashboard() {
                     {applicant.full_name}
                   </h3>
                   <p className="text-xs text-blue-600 font-medium mt-1">{applicant.nationality}</p>
-                  <span className="inline-block mt-2 text-[10px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full font-semibold">
-                    {applicant.status || "New"}
+                  <span className="inline-block mt-2 text-[10px] bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full font-semibold">
+                    For Review
                   </span>
                 </div>
               </div>
@@ -128,17 +127,17 @@ export default function RecruiterDashboard() {
                 </div>
               </div>
 
-              <div className="px-4 py-3 bg-gray-50 border-t border-gray-100 flex justify-between items-center gap-2">
+              <div className="px-4 py-3 bg-amber-50 border-t border-amber-100 flex justify-between items-center gap-2">
                 <span className="text-xs text-gray-400">
                   Applied: {new Date(applicant.created_at).toLocaleDateString()}
                 </span>
                 <div className="flex items-center gap-2 flex-shrink-0">
                   <button
-                    onClick={(e) => handleSendForReview(applicant.id, e)}
-                    disabled={sendingId === applicant.id}
-                    className="text-[11px] bg-amber-500 text-white px-2.5 py-1 rounded-md font-semibold hover:bg-amber-600 transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed whitespace-nowrap"
+                    onClick={(e) => handleMoveBack(applicant.id, e)}
+                    disabled={movingBackId === applicant.id}
+                    className="text-[11px] bg-gray-200 text-gray-700 px-2.5 py-1 rounded-md font-semibold hover:bg-gray-300 transition-colors disabled:cursor-not-allowed whitespace-nowrap"
                   >
-                    {sendingId === applicant.id ? "Sending..." : "Send for Review"}
+                    {movingBackId === applicant.id ? "Moving..." : "Move Back"}
                   </button>
                   <button
                     onClick={(e) => { e.stopPropagation(); setSelectedApplicant(applicant); }}
@@ -163,7 +162,7 @@ export default function RecruiterDashboard() {
             className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto shadow-xl border border-gray-100 flex flex-col"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+            <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-amber-50">
               <h2 className="text-xl font-bold text-gray-800">Candidate Full Profile</h2>
               <button onClick={() => setSelectedApplicant(null)} className="text-gray-400 hover:text-gray-600 text-2xl font-semibold leading-none p-2">&times;</button>
             </div>
@@ -182,8 +181,8 @@ export default function RecruiterDashboard() {
                   <h3 className="text-2xl font-bold text-gray-900">{selectedApplicant.full_name}</h3>
                   <p className="text-sm text-blue-600 font-semibold">{selectedApplicant.nationality}</p>
                   <div className="pt-2">
-                    <span className="bg-emerald-100 text-emerald-800 text-xs px-3 py-1 rounded-full font-semibold">
-                      {selectedApplicant.status || "New"}
+                    <span className="bg-amber-100 text-amber-800 text-xs px-3 py-1 rounded-full font-semibold">
+                      For Review
                     </span>
                   </div>
                 </div>
@@ -233,20 +232,20 @@ export default function RecruiterDashboard() {
               </div>
             </div>
 
-            <div className="p-6 border-t border-gray-100 bg-gray-50 flex justify-between items-center gap-3">
+            <div className="p-6 border-t border-gray-100 bg-amber-50 flex justify-between items-center gap-3">
               <button
                 onClick={(e) => {
                   setSelectedApplicant(null);
-                  handleSendForReview(selectedApplicant.id, e);
+                  handleMoveBack(selectedApplicant.id, e);
                 }}
-                disabled={sendingId === selectedApplicant.id}
-                className="bg-amber-500 text-white px-5 py-2.5 rounded-lg text-sm font-medium hover:bg-amber-600 transition-colors disabled:bg-gray-300"
+                disabled={movingBackId === selectedApplicant.id}
+                className="bg-gray-200 text-gray-700 px-5 py-2.5 rounded-lg text-sm font-medium hover:bg-gray-300 transition-colors disabled:opacity-50"
               >
-                {sendingId === selectedApplicant.id ? "Sending..." : "Send for Review"}
+                Move Back to Candidates
               </button>
               <button
                 onClick={() => setSelectedApplicant(null)}
-                className="bg-gray-200 text-gray-700 px-5 py-2.5 rounded-lg text-sm font-medium hover:bg-gray-300 transition-colors"
+                className="bg-amber-500 text-white px-5 py-2.5 rounded-lg text-sm font-medium hover:bg-amber-600 transition-colors"
               >
                 Close
               </button>
