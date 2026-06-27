@@ -147,7 +147,7 @@ export default function ForReviewDashboard() {
   }, []);
 
   /* ── Card mousedown ── */
-  const handleCardMouseDown = useCallback((e: React.MouseEvent, applicant: Applicant) => {
+  const handleCardPointerDown = useCallback((e: React.PointerEvent, applicant: Applicant) => {
     if (e.button !== 0 || movingBackId) return;
     e.preventDefault();
 
@@ -164,16 +164,18 @@ export default function ForReviewDashboard() {
       setDragState({ id: applicant.id, x: mx, y: my, w: width, h: height, isOverCandidates: false, overIndex: -1 });
     };
 
-    const onMove = (me: MouseEvent) => {
+    const onMove = (me: PointerEvent) => {
       if (Math.hypot(me.clientX - ox, me.clientY - oy) >= 8) { cleanup(); activate(me.clientX, me.clientY); }
     };
     const onUp   = () => { setPressingId(null); cleanup(); };
     const cleanup = () => {
-      document.removeEventListener("mousemove", onMove);
-      document.removeEventListener("mouseup", onUp);
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp);
+      document.removeEventListener("pointercancel", onUp);
     };
-    document.addEventListener("mousemove", onMove);
-    document.addEventListener("mouseup", onUp);
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onUp);
+    document.addEventListener("pointercancel", onUp);
   }, [movingBackId]);
 
   /* ── Active drag tracking ── */
@@ -182,7 +184,7 @@ export default function ForReviewDashboard() {
 
     const candidatesEl = () => document.querySelector<HTMLElement>("[data-candidates-drop]");
 
-    const onMove = (e: MouseEvent) => {
+    const onMove = (e: PointerEvent) => {
       const el = candidatesEl();
       let isOverCandidates = false;
       if (el) {
@@ -219,12 +221,14 @@ export default function ForReviewDashboard() {
 
     const noSelect = (e: Event) => e.preventDefault();
     document.addEventListener("selectstart", noSelect);
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
     return () => {
       document.removeEventListener("selectstart", noSelect);
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
       candidatesEl()?.classList.remove("candidates-drag-hover");
       document.body.classList.remove("ht-drag-active-review");
     };
@@ -279,12 +283,13 @@ export default function ForReviewDashboard() {
               <div
                 key={applicant.id}
                 ref={(el) => { el ? cardRefs.current.set(applicant.id, el) : cardRefs.current.delete(applicant.id); }}
-                onMouseDown={(e) => handleCardMouseDown(e, applicant)}
+                onPointerDown={(e) => handleCardPointerDown(e, applicant)}
                 onClick={() => { if (!wasDragging.current) setSelected(applicant); }}
                 style={{
                   transform:  isPressing ? "scale(0.88)" : "scale(1)",
                   transition: "transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.18s ease",
                   cursor:     isPressing ? "grabbing" : "grab",
+                  touchAction: "none",
                   userSelect: "none",
                 }}
                 className="bg-white rounded-xl border border-amber-200 shadow-sm overflow-hidden flex flex-col hover:shadow-md"
@@ -335,7 +340,7 @@ export default function ForReviewDashboard() {
                   <span className="text-xs text-gray-400">Applied: {new Date(applicant.created_at).toLocaleDateString()}</span>
                   <div
                     className="flex items-center gap-2 flex-shrink-0"
-                    onMouseDown={(e) => e.stopPropagation()}
+                    onPointerDown={(e) => e.stopPropagation()}
                   >
                     <button
                       onClick={(e) => { e.stopPropagation(); handleMoveBack(applicant.id); }}

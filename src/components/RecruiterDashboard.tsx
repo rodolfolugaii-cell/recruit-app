@@ -150,8 +150,8 @@ export default function RecruiterDashboard() {
   }, []);
 
   /* ── Card mousedown — starts the press / activates drag after 8px movement ── */
-  const handleCardMouseDown = useCallback((e: React.MouseEvent, applicant: Applicant) => {
-    if (e.button !== 0 || sendingId) return;
+  const handleCardPointerDown = useCallback((e: React.PointerEvent, applicant: Applicant) => {
+    if ((e.pointerType === "mouse" && e.button !== 0) || sendingId) return;
     e.preventDefault();
 
     const el = cardRefs.current.get(applicant.id);
@@ -167,16 +167,18 @@ export default function RecruiterDashboard() {
       setDragState({ id: applicant.id, x: mx, y: my, w: width, h: height, isOverReview: false, overIndex: -1 });
     };
 
-    const onMove = (me: MouseEvent) => {
+    const onMove = (me: PointerEvent) => {
       if (Math.hypot(me.clientX - ox, me.clientY - oy) >= 8) { cleanup(); activate(me.clientX, me.clientY); }
     };
     const onUp   = () => { setPressingId(null); cleanup(); };
     const cleanup = () => {
-      document.removeEventListener("mousemove", onMove);
-      document.removeEventListener("mouseup", onUp);
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp);
+      document.removeEventListener("pointercancel", onUp);
     };
-    document.addEventListener("mousemove", onMove);
-    document.addEventListener("mouseup", onUp);
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onUp);
+    document.addEventListener("pointercancel", onUp);
   }, [sendingId]);
 
   /* ── Active drag tracking (position + review-zone detection + reorder preview) ── */
@@ -185,7 +187,7 @@ export default function RecruiterDashboard() {
 
     const reviewEl = () => document.querySelector<HTMLElement>("[data-review-drop]");
 
-    const onMove = (e: MouseEvent) => {
+    const onMove = (e: PointerEvent) => {
       const el = reviewEl();
       let isOverReview = false;
       if (el) {
@@ -223,12 +225,14 @@ export default function RecruiterDashboard() {
 
     const noSelect = (e: Event) => e.preventDefault();
     document.addEventListener("selectstart", noSelect);
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
     return () => {
       document.removeEventListener("selectstart", noSelect);
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
       reviewEl()?.classList.remove("drag-hover");
       document.body.classList.remove("ht-drag-active");
     };
@@ -286,12 +290,13 @@ export default function RecruiterDashboard() {
               <div
                 key={applicant.id}
                 ref={(el) => { el ? cardRefs.current.set(applicant.id, el) : cardRefs.current.delete(applicant.id); }}
-                onMouseDown={(e) => handleCardMouseDown(e, applicant)}
+                onPointerDown={(e) => handleCardPointerDown(e, applicant)}
                 onClick={() => { if (!wasDragging.current) setSelected(applicant); }}
                 style={{
                   transform:  isPressing ? "scale(0.88)" : "scale(1)",
                   transition: "transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.18s ease",
                   cursor:     isPressing ? "grabbing" : "grab",
+                  touchAction: "none",
                   userSelect: "none",
                 }}
                 className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden flex flex-col hover:shadow-md"
@@ -343,7 +348,7 @@ export default function RecruiterDashboard() {
                   {/* stopPropagation on the wrapper prevents drag from starting on button clicks */}
                   <div
                     className="flex items-center gap-2 flex-shrink-0"
-                    onMouseDown={(e) => e.stopPropagation()}
+                    onPointerDown={(e) => e.stopPropagation()}
                   >
                     <button
                       onClick={(e) => { e.stopPropagation(); handleSendForReview(applicant.id); }}
