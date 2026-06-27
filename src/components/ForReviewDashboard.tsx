@@ -4,6 +4,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { supabase } from "@/lib/supabase";
 
+interface WorkExperienceEntry {
+  yearsOfEmployment: string; dateFrom: string; dateTo: string;
+  location: string; flatSize: string; contractStatus: string;
+  terminatedReason: string; breakReason: string; householdChores: string[];
+  jobDuties: string; coHelpers: string; employerNationality: string; familyMembers: string;
+}
 interface Applicant {
   id: string;
   created_at: string;
@@ -15,13 +21,20 @@ interface Applicant {
   photo_url: string;
   status: string;
   form_data: {
-    placeOfBirth?: string;
-    currentLocation?: string;
-    height?: string;
-    weight?: string;
-    maritalStatus?: string;
-    education?: string;
-    religion?: string;
+    placeOfBirth?: string;       currentLocation?: string;
+    height?: string;             weight?: string;
+    maritalStatus?: string;      education?: string;
+    religion?: string;           contractStatus?: string;
+    lastWorkingDay?: string;     numberOfKids?: string;
+    boysAges?: string;           girlsAges?: string;
+    familyMembersCount?: string; educationCourse?: string;
+    totalYearsHK?: string;       numberOfEmployers?: string;
+    languages?: { english?: string; cantonese?: string; mandarin?: string; };
+    specialSkills?: string;
+    skills?: string[];           cookingAbilities?: string[];
+    preferences?: { sundayOff?: boolean; flexibleDayOff?: boolean; willingWithOtherHelper?: boolean; willingStayIn?: boolean; };
+    otherExperience?: { country?: string; yearsOfEmployment?: string; jobDuties?: string; }[];
+    workExperience?: WorkExperienceEntry[];
   };
 }
 
@@ -76,6 +89,99 @@ function CardSnapshot({ applicant }: { applicant: Applicant }) {
     </div>
   );
 }
+
+/* ── Modal helper components ──────────────────────────────────────────── */
+function ModalSection({ title }: { title: string }) {
+  return (
+    <h4 className="text-[11px] font-semibold text-gray-400 uppercase tracking-widest mt-5 mb-3 pb-1 border-b border-gray-100 first:mt-0">
+      {title}
+    </h4>
+  );
+}
+function ModalField({ label, value }: { label: string; value?: string | null }) {
+  if (!value) return null;
+  return (
+    <div className="pb-2 border-b border-gray-50">
+      <p className="text-[10px] text-gray-400 uppercase tracking-wider font-medium">{label}</p>
+      <p className="text-sm font-semibold text-gray-800 mt-0.5">{value}</p>
+    </div>
+  );
+}
+
+/* ── Biodata form helpers ──────────────────────────────────────────────── */
+function BiodataCB({ checked }: { checked?: boolean }) {
+  return (
+    <span className="inline-flex items-center justify-center w-[13px] h-[13px] border border-gray-600 text-[12px] leading-none flex-shrink-0 align-middle">
+      {checked ? "✓" : ""}
+    </span>
+  );
+}
+function BiodataFL({ label, value, cls }: { label: string; value?: string | null; cls?: string }) {
+  return (
+    <div className={`flex items-baseline gap-0.5 min-w-0 ${cls ?? ""}`}>
+      <span className="text-[11px] text-gray-500 whitespace-nowrap flex-shrink-0">{label}</span>
+      <span className="border-b border-gray-300 flex-1 font-medium text-[12px] min-h-[14px] overflow-hidden leading-tight">
+        {value ?? ""}
+      </span>
+    </div>
+  );
+}
+function BiodataWE({ entry }: { entry: WorkExperienceEntry | null }) {
+  const e = entry;
+  return (
+    <div className="text-[12px] space-y-1.5">
+      <div className="flex gap-2">
+        <BiodataFL label="Yrs of Employment:" value={e?.yearsOfEmployment} cls="flex-1" />
+        <BiodataFL label="Date From (mm/yyyy):" value={e?.dateFrom} cls="flex-1" />
+        <BiodataFL label="To (mm/yyyy):" value={e?.dateTo} cls="flex-1" />
+      </div>
+      <div className="flex gap-2">
+        <BiodataFL label="Location:" value={e?.location} cls="flex-[2]" />
+        <BiodataFL label="Flat Size:" value={e?.flatSize ? `${e.flatSize} sq.ft.` : ""} cls="flex-1" />
+      </div>
+      <div className="flex flex-wrap gap-x-3 gap-y-0.5">
+        {(["Finished Contract", "Plan to Break", "Terminated", "Break"] as const).map((s) => (
+          <span key={s} className="flex items-center gap-1">
+            <BiodataCB checked={e?.contractStatus === s} /> {s}
+          </span>
+        ))}
+      </div>
+      {e?.terminatedReason && (
+        <div className="flex items-baseline gap-1">
+          <span className="text-gray-500 whitespace-nowrap">Terminated/ Reason:</span>
+          <span className="border-b border-gray-300 flex-1 font-medium">{e.terminatedReason}</span>
+        </div>
+      )}
+      {e?.breakReason && (
+        <div className="flex items-baseline gap-1">
+          <span className="text-gray-500 whitespace-nowrap">Break/ Reason:</span>
+          <span className="border-b border-gray-300 flex-1 font-medium">{e.breakReason}</span>
+        </div>
+      )}
+      <div>
+        <p className="font-semibold text-[11px] uppercase mb-1">Household Chores</p>
+        <div className="flex flex-wrap gap-x-2 gap-y-0.5">
+          {["Cooking", "Child Care", "New Born Care", "Special Child Care", "Elderly Care",
+            "Disabled Person Care", "Pet Care", "Driving", "Car Washing", "Plant Care / Gardening"].map((c) => (
+            <span key={c} className="flex items-center gap-0.5">
+              <BiodataCB checked={e?.householdChores?.includes(c)} /> {c}
+            </span>
+          ))}
+        </div>
+      </div>
+      <div className="flex items-start gap-1">
+        <span className="text-gray-500 whitespace-nowrap text-[11px] uppercase font-semibold flex-shrink-0">JOB DUTIES:</span>
+        <span className="border-b border-gray-300 flex-1 font-medium min-h-[14px]">{e?.jobDuties ?? ""}</span>
+      </div>
+      <div className="flex gap-2">
+        <BiodataFL label="No. of Co-helper:" value={e?.coHelpers} cls="flex-1" />
+        <BiodataFL label="Nationality of Employer:" value={e?.employerNationality} cls="flex-[2]" />
+      </div>
+      <BiodataFL label="Family Members:" value={e?.familyMembers} />
+    </div>
+  );
+}
+
 
 export default function ForReviewDashboard() {
   const [applicants, setApplicants]      = useState<Applicant[]>([]);
@@ -345,6 +451,11 @@ export default function ForReviewDashboard() {
                     <span className="inline-block mt-2 text-[10px] bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full font-semibold">
                       For Review
                     </span>
+                    {applicant.form_data?.contractStatus && (
+                      <span className="inline-block mt-1 text-[10px] bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">
+                        {applicant.form_data.contractStatus}
+                      </span>
+                    )}
                   </div>
                 </div>
 
@@ -439,54 +550,256 @@ export default function ForReviewDashboard() {
           onClick={() => setSelected(null)}
         >
           <div
-            className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto shadow-xl border border-gray-100 flex flex-col"
+            className="bg-white rounded-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto shadow-xl border border-gray-200 flex flex-col"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-amber-50">
-              <h2 className="text-xl font-bold text-gray-800">Candidate Full Profile</h2>
+            <div className="p-3 border-b border-gray-200 flex justify-between items-center bg-white">
+              <h2 className="text-xs font-bold text-gray-600 uppercase tracking-widest">Applicant Biodata</h2>
               <button onClick={() => setSelected(null)} className="text-gray-400 hover:text-gray-600 text-2xl font-semibold leading-none p-2">&times;</button>
             </div>
 
-            <div className="p-6 space-y-6">
-              <div className="flex flex-col sm:flex-row items-center sm:items-start space-y-4 sm:space-y-0 sm:space-x-6 pb-6 border-b border-gray-100">
-                <div className="w-32 h-32 bg-gray-100 rounded-xl overflow-hidden border shadow-inner flex-shrink-0">
-                  {selectedApplicant.photo_url ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={selectedApplicant.photo_url} alt={selectedApplicant.full_name} className="w-full h-full object-cover" />
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center text-gray-400 text-xs">No Photo</div>
-                  )}
-                </div>
-                <div className="text-center sm:text-left space-y-1">
-                  <h3 className="text-2xl font-bold text-gray-900">{selectedApplicant.full_name}</h3>
-                  <p className="text-sm text-blue-600 font-semibold">{selectedApplicant.nationality}</p>
-                  <div className="pt-2">
-                    <span className="bg-amber-100 text-amber-800 text-xs px-3 py-1 rounded-full font-semibold">
-                      For Review
-                    </span>
-                  </div>
-                </div>
-              </div>
+            <div className="p-5 bg-white text-gray-900 leading-tight" style={{ fontSize: "13px" }}>
+              {(() => {
+                const fd = selectedApplicant.form_data;
+                const ap = selectedApplicant;
+                const dob = ap.date_of_birth ? new Date(ap.date_of_birth) : null;
+                const age = dob ? String(new Date().getFullYear() - dob.getFullYear()) : "";
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-4 text-sm">
-                {([
-                  ["Date of Birth",    selectedApplicant.date_of_birth ? new Date(selectedApplicant.date_of_birth).toLocaleDateString() : "N/A"],
-                  ["Place of Birth",   selectedApplicant.form_data?.placeOfBirth    || "N/A"],
-                  ["Gender",           selectedApplicant.gender],
-                  ["Mobile Phone",     selectedApplicant.mobile],
-                  ["Current Location", selectedApplicant.form_data?.currentLocation || "N/A"],
-                  ["Education Level",  selectedApplicant.form_data?.education        || "N/A"],
-                  ["Religion",         selectedApplicant.form_data?.religion         || "N/A"],
-                  ["Marital Status",   selectedApplicant.form_data?.maritalStatus    || "N/A"],
-                  ["Height",           selectedApplicant.form_data?.height ? `${selectedApplicant.form_data.height} cm` : "N/A"],
-                  ["Weight",           selectedApplicant.form_data?.weight ? `${selectedApplicant.form_data.weight} kg` : "N/A"],
-                ] as [string, string][]).map(([label, value]) => (
-                  <div key={label} className="border-b pb-2">
-                    <span className="text-gray-400 block text-xs uppercase tracking-wider font-semibold">{label}</span>
-                    <span className="font-semibold text-gray-800">{value}</span>
-                  </div>
-                ))}
-              </div>
+                return (
+                  <>
+                    {/* ── Company Header ── */}
+                    <div className="text-center mb-3 pb-3 border-b-2 border-gray-800">
+                      <p className="font-bold tracking-widest" style={{ fontSize: "15px" }}>CASTILLO DEL REY CONSULTANCY</p>
+                      <p className="text-gray-500 text-[9px] mt-0.5">Shop D1, 1/F, Planet Square, 1-15 Tal Man Street, Hung Hom, Kowloon, Hong Kong</p>
+                    </div>
+
+                    {/* ── Section title + contract status ── */}
+                    <div className="mb-2 pb-2 border-b border-gray-300">
+                      <p className="font-bold text-[10px] mb-1.5">
+                        PERSONAL PARTICULAR{" "}
+                        <span className="font-normal">(Please write in BOLD/CAPITAL Letters)</span>
+                      </p>
+                      <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[10px]">
+                        {["Finished Contract", "Terminated", "Break of Contract", "Plan to Break"].map((s) => (
+                          <span key={s} className="flex items-center gap-1">
+                            <BiodataCB checked={fd?.contractStatus === s} /> {s}
+                          </span>
+                        ))}
+                        <span className="flex items-center gap-1 ml-1">
+                          Last working day:&nbsp;
+                          <span className="border-b border-gray-400 inline-block min-w-[80px] font-medium">
+                            {fd?.lastWorkingDay ? new Date(fd.lastWorkingDay).toLocaleDateString() : ""}
+                          </span>
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* ── Photo (LEFT) + Personal Info ── */}
+                    <div className="flex gap-4 mb-2 pb-2 border-b border-gray-300">
+                      {/* Photo — LEFT side */}
+                      <div className="w-28 flex-shrink-0 flex flex-col items-center gap-1">
+                        <div className="w-28 h-36 border-2 border-gray-500 overflow-hidden flex items-center justify-center bg-gray-50">
+                          {ap.photo_url ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img src={ap.photo_url} alt="" className="w-full h-full object-cover" />
+                          ) : (
+                            <span className="text-[11px] text-gray-400 text-center">Photo</span>
+                          )}
+                        </div>
+                        <p className="text-[10px] text-gray-400 text-center">Photo</p>
+                        <BiodataFL label="Basic:" value="" cls="w-full" />
+                      </div>
+                      {/* Personal info — RIGHT side */}
+                      <div className="flex-1 space-y-1.5 text-[12px]">
+                        <div className="flex gap-2">
+                          <BiodataFL label="Name:" value={ap.full_name} cls="flex-[2]" />
+                          <BiodataFL label="Date of Birth:" value={dob ? dob.toLocaleDateString() : ""} cls="flex-1" />
+                          <BiodataFL label="Nationality:" value={ap.nationality} cls="flex-1" />
+                        </div>
+                        <div className="flex gap-2">
+                          <BiodataFL label="Religion:" value={fd?.religion} cls="flex-1" />
+                          <BiodataFL label="Height:" value={fd?.height ? `${fd.height} cm` : ""} cls="flex-1" />
+                          <BiodataFL label="Weight:" value={fd?.weight ? `${fd.weight} kg` : ""} cls="flex-1" />
+                          <BiodataFL label="Age:" value={age} cls="w-14" />
+                        </div>
+                        <div className="flex gap-2">
+                          <BiodataFL label="Marital Status:" value={fd?.maritalStatus} cls="flex-1" />
+                          <BiodataFL label="Gender:" value={ap.gender} cls="flex-1" />
+                        </div>
+                        <div className="flex items-baseline gap-2">
+                          <span className="text-gray-500 whitespace-nowrap">How many kids:</span>
+                          <span className="border-b border-gray-300 w-6 font-medium">{fd?.numberOfKids ?? ""}</span>
+                          <span className="text-gray-500 whitespace-nowrap">B/A:</span>
+                          <span className="border-b border-gray-300 w-14 font-medium">{fd?.boysAges ?? ""}</span>
+                          <span className="text-gray-500 whitespace-nowrap">G/A:</span>
+                          <span className="border-b border-gray-300 w-14 font-medium">{fd?.girlsAges ?? ""}</span>
+                          <span className="text-gray-500 whitespace-nowrap">Family Members:</span>
+                          <span className="border-b border-gray-300 w-8 font-medium">{fd?.familyMembersCount ?? ""}</span>
+                        </div>
+                        <div className="flex gap-2">
+                          <BiodataFL label="Mobile:" value={ap.mobile} cls="flex-1" />
+                          <BiodataFL label="Place of Birth:" value={fd?.placeOfBirth} cls="flex-1" />
+                          <BiodataFL label="Current Location:" value={fd?.currentLocation} cls="flex-1" />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* ── Spoken Language ── */}
+                    <div className="mb-2 pb-2 border-b border-gray-300">
+                      <span className="font-bold text-[10px] uppercase">Spoken Language</span>
+                      <div className="flex flex-wrap gap-x-8 gap-y-0.5 mt-1 text-[10px]">
+                        {(["English", "Cantonese", "Mandarin"] as const).map((lang) => {
+                          const key = lang.toLowerCase() as "english" | "cantonese" | "mandarin";
+                          return (
+                            <div key={lang} className="flex items-center gap-2">
+                              <span className="text-gray-600 font-medium">{lang}</span>
+                              <span className="flex items-center gap-1">
+                                <BiodataCB checked={fd?.languages?.[key] === "Basic"} /> Basic
+                              </span>
+                              <span className="flex items-center gap-1">
+                                <BiodataCB checked={fd?.languages?.[key] === "Good"} /> Good
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* ── Education ── */}
+                    <div className="mb-2 pb-2 border-b border-gray-300 text-[10px]">
+                      <span className="font-bold uppercase">Educational Background</span>
+                      <div className="flex flex-wrap gap-x-4 gap-y-0.5 mt-1">
+                        {[
+                          { label: "High School Graduate", val: "High School Graduate" },
+                          { label: "College Undergraduate", val: "College Undergraduate" },
+                          { label: "College Graduate",     val: "College Graduate"     },
+                          { label: "Vocational Course",    val: "Vocational Course"    },
+                        ].map(({ label, val }) => (
+                          <span key={val} className="flex items-center gap-1">
+                            <BiodataCB checked={fd?.education === val} /> {label}
+                            {["College Graduate","College Undergraduate","Vocational Course"].includes(val) &&
+                              fd?.education === val && fd?.educationCourse && (
+                              <span className="ml-1 text-gray-600">
+                                Course/: <span className="font-medium">{fd.educationCourse}</span>
+                              </span>
+                            )}
+                          </span>
+                        ))}
+                      </div>
+                      <div className="flex gap-6 mt-1">
+                        <span>
+                          Total Years in Hong Kong:{" "}
+                          <span className="border-b border-gray-300 inline-block w-8 font-medium">{fd?.totalYearsHK ?? ""}</span>
+                        </span>
+                        <span>
+                          How Many Employers:{" "}
+                          <span className="border-b border-gray-300 inline-block w-8 font-medium">{fd?.numberOfEmployers ?? ""}</span>
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* ── Special Skills ── */}
+                    <div className="mb-2 pb-2 border-b border-gray-300 text-[10px]">
+                      <span className="font-bold uppercase">SPECIAL SKILLS</span>
+                      <div className="border-b border-gray-300 mt-1 min-h-[16px] font-medium">{fd?.specialSkills ?? ""}</div>
+                      <div className="border-b border-gray-300 min-h-[14px]" />
+                    </div>
+
+                    {/* ── Other Country Experience ── */}
+                    <div className="mb-2 pb-2 border-b border-gray-300 text-[10px]">
+                      <span className="font-bold uppercase">OTHER COUNTRY EXPERIENCE</span>
+                      <div className="grid grid-cols-2 gap-4 mt-1">
+                        {(["A", "B"] as const).map((letter, i) => {
+                          const exp = fd?.otherExperience?.[i];
+                          return (
+                            <div key={letter}>
+                              <div className="flex items-baseline gap-1 mb-1">
+                                <span className="font-bold">{letter}.</span>
+                                <span className="border-b border-gray-300 flex-1 font-medium">{exp?.country ?? ""}</span>
+                              </div>
+                              <BiodataFL label="Yrs. of Employment:" value={exp?.yearsOfEmployment} cls="mb-1" />
+                              <div>
+                                <span className="text-gray-500">Job Duties:</span>
+                                <div className="border-b border-gray-300 min-h-[14px] font-medium mt-0.5">{exp?.jobDuties ?? ""}</div>
+                                <div className="border-b border-gray-300 min-h-[14px]" />
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* ── Current HK Work Experience + Skills (2-column) ── */}
+                    <div className="flex mb-2 border-b border-gray-300 pb-2">
+                      {/* Left: Work Experience */}
+                      <div className="flex-1 pr-3 border-r border-gray-400 text-[10px]">
+                        <p className="font-bold text-[9px] uppercase mb-2 tracking-wide">
+                          CURRENT WORKING EXPERIENCE in Hong Kong
+                        </p>
+                        {fd?.workExperience && fd.workExperience.length > 0
+                          ? <BiodataWE entry={fd.workExperience[0]} />
+                          : <BiodataWE entry={null} />}
+                      </div>
+                      {/* Right: Skills */}
+                      <div className="w-[43%] pl-3 text-[10px]">
+                        <p className="font-bold text-[9px] uppercase mb-1.5 tracking-wide">MY SKILLS</p>
+                        <div className="grid grid-cols-2 gap-x-1 gap-y-0.5 mb-3">
+                          {["Cooking","Child Care","New Born Care","Special Child Care",
+                            "Elderly Care","Disabled Person Care","Pet Care","Driving",
+                            "Car Washing","Plant Care","Kids Tutorial","Nursing Aide"].map((s) => (
+                            <span key={s} className="flex items-center gap-1">
+                              <BiodataCB checked={fd?.skills?.includes(s)} /> {s}
+                            </span>
+                          ))}
+                        </div>
+                        <p className="font-bold text-[9px] uppercase mb-1 tracking-wide">COOKING ABILITIES</p>
+                        <div className="space-y-0.5 mb-3">
+                          {["Western Food","Asian Food","Mediterranean Food","Baking","Can follow Recipe and Cook Book"].map((c) => (
+                            <span key={c} className="flex items-center gap-1">
+                              <BiodataCB checked={fd?.cookingAbilities?.includes(c)} /> {c}
+                            </span>
+                          ))}
+                        </div>
+                        <div className="space-y-0.5">
+                          <span className="flex items-center gap-1"><BiodataCB checked={fd?.preferences?.sundayOff}              /> Prefer Sunday Off</span>
+                          <span className="flex items-center gap-1"><BiodataCB checked={fd?.preferences?.flexibleDayOff}         /> Flexible Day off</span>
+                          <span className="flex items-center gap-1"><BiodataCB checked={fd?.preferences?.willingWithOtherHelper} /> Willing to Work with other helper</span>
+                          <span className="flex items-center gap-1"><BiodataCB checked={fd?.preferences?.willingStayIn}          /> Willing to work with stay in employer</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* ── Additional HK Work Experience entries ── */}
+                    {fd?.workExperience && fd.workExperience.length > 1 &&
+                      fd.workExperience.slice(1).map((we, i) => (
+                        <div key={i} className="mb-2 pb-2 border-b border-gray-300 text-[10px]">
+                          <p className="font-bold text-[9px] uppercase mb-2 tracking-wide">
+                            WORK EXPERIENCE in Hong Kong #{i + 2}/
+                          </p>
+                          <BiodataWE entry={we} />
+                        </div>
+                      ))
+                    }
+
+                    {/* ── Disclaimer + Signature ── */}
+                    <div className="mt-4 pt-3 border-t border-gray-300 text-[9px] text-gray-600 leading-relaxed">
+                      <p>
+                        I hereby certify that the above information is true and correct to the best of my ability and agree that{" "}
+                        <strong className="text-gray-800">CASTILLO DEL REY CONSULTANCY</strong> may disclose my personal profile
+                        to potential employers for the purpose of seeking employment as Foreign Domestic Helper.
+                      </p>
+                      <p className="font-bold text-[10px] text-center tracking-[0.25em] mt-2 text-gray-700">
+                        CASTILLODELREYCONSULTANCY
+                      </p>
+                      <div className="mt-4 flex justify-start">
+                        <div className="text-center">
+                          <div className="border-t border-gray-500 w-44 pt-1 text-[9px]">Signature of Applicant</div>
+                        </div>
+                      </div>
+                    </div>
+                  </>
+                );
+              })()}
             </div>
 
             <div className="p-6 border-t border-gray-100 bg-amber-50 flex justify-between items-center gap-3">

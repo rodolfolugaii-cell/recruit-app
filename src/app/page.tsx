@@ -29,14 +29,14 @@ export default function Home() {
             href="/apply"
             className="block w-full bg-blue-600 text-white py-3 rounded-lg font-medium hover:bg-blue-500 transition-colors shadow"
           >
-            I am an Applicant — Apply Here
+            I am an Applicant
           </Link>
 
           <Link
             href="/login"
             className="block w-full bg-white/15 text-white border border-white/30 py-3 rounded-lg font-medium hover:bg-white/25 transition-colors"
           >
-            I am a Recruiter — Dashboard
+            I am a Recruiter
           </Link>
         </div>
       </div>
