@@ -39,8 +39,8 @@ interface DragState {
 function CardSnapshot({ applicant }: { applicant: Applicant }) {
   return (
     <div className="bg-white rounded-xl border border-amber-200 overflow-hidden flex flex-col h-full">
-      <div className="p-3 md:p-6 flex items-start space-x-3 md:space-x-4 border-b border-gray-100">
-        <div className="w-12 h-12 md:w-20 md:h-20 bg-gray-100 rounded-lg overflow-hidden flex-shrink-0 border">
+      <div className="p-6 flex items-start space-x-4 border-b border-gray-100">
+        <div className="w-20 h-20 bg-gray-100 rounded-lg overflow-hidden flex-shrink-0 border">
           {applicant.photo_url ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img src={applicant.photo_url} alt="" className="w-full h-full object-cover" />
@@ -56,7 +56,7 @@ function CardSnapshot({ applicant }: { applicant: Applicant }) {
           </span>
         </div>
       </div>
-      <div className="p-3 md:p-6 space-y-1.5 md:space-y-2 text-sm text-gray-600 flex-grow">
+      <div className="p-6 space-y-2 text-sm text-gray-600 flex-grow">
         <div className="flex justify-between">
           <span className="text-gray-400">Gender:</span>
           <span className="font-medium">{applicant.gender}</span>
@@ -276,7 +276,7 @@ export default function ForReviewDashboard() {
         </div>
       ) : (
         <div
-          className="grid grid-cols-2 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 md:gap-6"
+          className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6"
 
         >
           {displayedApplicants.map((applicant) => {
@@ -330,8 +330,8 @@ export default function ForReviewDashboard() {
                   }}
                 />
                 {/* ── Photo + name ── */}
-                <div className="p-3 md:p-6 flex items-start space-x-3 md:space-x-4 border-b border-gray-100">
-                  <div className="w-12 h-12 md:w-20 md:h-20 bg-gray-100 rounded-lg overflow-hidden flex-shrink-0 border">
+                <div className="p-6 flex items-start space-x-4 border-b border-gray-100">
+                  <div className="w-20 h-20 bg-gray-100 rounded-lg overflow-hidden flex-shrink-0 border">
                     {applicant.photo_url ? (
                       // eslint-disable-next-line @next/next/no-img-element
                       <img src={applicant.photo_url} alt={applicant.full_name} className="w-full h-full object-cover" />
@@ -349,7 +349,7 @@ export default function ForReviewDashboard() {
                 </div>
 
                 {/* ── Details ── */}
-                <div className="p-3 md:p-6 space-y-1.5 md:space-y-2 text-sm text-gray-600 flex-grow">
+                <div className="p-6 space-y-2 text-sm text-gray-600 flex-grow">
                   <div className="flex justify-between">
                     <span className="text-gray-400">Gender:</span>
                     <span className="font-medium">{applicant.gender}</span>
