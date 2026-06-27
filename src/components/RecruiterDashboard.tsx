@@ -39,8 +39,8 @@ interface DragState {
 function CardSnapshot({ applicant }: { applicant: Applicant }) {
   return (
     <div className="bg-white rounded-xl border border-gray-200 overflow-hidden flex flex-col h-full">
-      <div className="p-6 flex items-start space-x-4 border-b border-gray-100">
-        <div className="w-20 h-20 bg-gray-100 rounded-lg overflow-hidden flex-shrink-0 border">
+      <div className="p-3 md:p-6 flex items-start space-x-3 md:space-x-4 border-b border-gray-100">
+        <div className="w-12 h-12 md:w-20 md:h-20 bg-gray-100 rounded-lg overflow-hidden flex-shrink-0 border">
           {applicant.photo_url ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img src={applicant.photo_url} alt="" className="w-full h-full object-cover" />
@@ -56,7 +56,7 @@ function CardSnapshot({ applicant }: { applicant: Applicant }) {
           </span>
         </div>
       </div>
-      <div className="p-6 space-y-2 text-sm text-gray-600 flex-grow">
+      <div className="p-3 md:p-6 space-y-1.5 md:space-y-2 text-sm text-gray-600 flex-grow">
         <div className="flex justify-between">
           <span className="text-gray-400">Gender:</span>
           <span className="font-medium">{applicant.gender}</span>
@@ -89,8 +89,9 @@ export default function RecruiterDashboard() {
   const [sortedIds, setSortedIds]           = useState<string[]>([]);
 
   // Refs so event-listener closures always see fresh state
-  const cardRefs      = useRef<Map<string, HTMLDivElement>>(new Map());
-  const dragRef       = useRef<DragState | null>(null);
+  const cardRefs          = useRef<Map<string, HTMLDivElement>>(new Map());
+  const cardRectsSnapshot = useRef<Map<string, DOMRect>>(new Map()); // stable snapshot taken at drag-start
+  const dragRef           = useRef<DragState | null>(null);
   const sortedRef     = useRef<string[]>([]);
   const wasDragging   = useRef(false);         // suppresses click-to-open after a drag
 
@@ -141,10 +142,18 @@ export default function RecruiterDashboard() {
     const ids = sortedRef.current;
     for (let i = 0; i < ids.length; i++) {
       if (ids[i] === dragId) continue;
-      const el = cardRefs.current.get(ids[i]);
-      if (!el) continue;
-      const r = el.getBoundingClientRect();
-      if (mx >= r.left && mx <= r.right && my >= r.top && my <= r.bottom) return i;
+      // Use the snapshot taken at drag-start — immune to live preview reordering
+      const r = cardRectsSnapshot.current.get(ids[i]);
+      if (!r) continue;
+      // Only trigger when cursor is inside the centre 60% of the card.
+      // The outer 20% on each side acts as a dead zone, preventing the
+      // rapid back-and-forth caused by cards shifting under the cursor.
+      const insetX = r.width  * 0.20;
+      const insetY = r.height * 0.20;
+      if (mx >= r.left + insetX && mx <= r.right  - insetX &&
+          my >= r.top  + insetY && my <= r.bottom - insetY) {
+        return i;
+      }
     }
     return -1;
   }, []);
@@ -158,6 +167,13 @@ export default function RecruiterDashboard() {
     if (!el) return;
     const { width, height } = el.getBoundingClientRect();
     const ox = e.clientX, oy = e.clientY;
+
+    // Snapshot every card's rect now, while the grid is in its natural order.
+    // We use this stable snapshot for the entire drag so live preview reordering
+    // doesn't cause oscillation during hover detection.
+    const snap = new Map<string, DOMRect>();
+    cardRefs.current.forEach((cardEl, id) => { snap.set(id, cardEl.getBoundingClientRect()); });
+    cardRectsSnapshot.current = snap;
     setPressingId(applicant.id);
 
     const activate = (mx: number, my: number) => {
@@ -267,7 +283,7 @@ export default function RecruiterDashboard() {
         </div>
       ) : (
         <div
-          className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6"
+          className="grid grid-cols-2 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 md:gap-6"
 
         >
           {displayedApplicants.map((applicant) => {
@@ -290,20 +306,39 @@ export default function RecruiterDashboard() {
               <div
                 key={applicant.id}
                 ref={(el) => { el ? cardRefs.current.set(applicant.id, el) : cardRefs.current.delete(applicant.id); }}
-                onPointerDown={(e) => handleCardPointerDown(e, applicant)}
                 onClick={() => { if (!wasDragging.current) setSelected(applicant); }}
                 style={{
                   transform:  isPressing ? "scale(0.88)" : "scale(1)",
                   transition: "transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.18s ease",
-                  cursor:     isPressing ? "grabbing" : "grab",
-                  touchAction: "none",
                   userSelect: "none",
+                  position:   "relative",   // anchor for the absolute overlay
                 }}
                 className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden flex flex-col hover:shadow-md"
               >
+                {/* ── Invisible centre-zone drag overlay (60 % × 60 %, centred) ──
+                    Only this region has touch-action:none — the card edges
+                    keep touch-action:auto so mobile scroll still works there. ── */}
+                <div
+                  onPointerDown={(e) => handleCardPointerDown(e, applicant)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (!wasDragging.current) setSelected(applicant);
+                  }}
+                  style={{
+                    position:    "absolute",
+                    top:         "20%",
+                    left:        "20%",
+                    width:       "60%",
+                    height:      "60%",
+                    touchAction: "none",
+                    cursor:      isPressing ? "grabbing" : "grab",
+                    zIndex:      10,
+                    borderRadius: "6px",
+                  }}
+                />
                 {/* ── Photo + name ── */}
-                <div className="p-6 flex items-start space-x-4 border-b border-gray-100">
-                  <div className="w-20 h-20 bg-gray-100 rounded-lg overflow-hidden flex-shrink-0 border">
+                <div className="p-3 md:p-6 flex items-start space-x-3 md:space-x-4 border-b border-gray-100">
+                  <div className="w-12 h-12 md:w-20 md:h-20 bg-gray-100 rounded-lg overflow-hidden flex-shrink-0 border">
                     {applicant.photo_url ? (
                       // eslint-disable-next-line @next/next/no-img-element
                       <img src={applicant.photo_url} alt={applicant.full_name} className="w-full h-full object-cover" />
@@ -321,7 +356,7 @@ export default function RecruiterDashboard() {
                 </div>
 
                 {/* ── Details ── */}
-                <div className="p-6 space-y-2 text-sm text-gray-600 flex-grow">
+                <div className="p-3 md:p-6 space-y-1.5 md:space-y-2 text-sm text-gray-600 flex-grow">
                   <div className="flex justify-between">
                     <span className="text-gray-400">Gender:</span>
                     <span className="font-medium">{applicant.gender}</span>
