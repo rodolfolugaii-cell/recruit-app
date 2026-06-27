@@ -24,3 +24,71 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Drag-to-review visual feedback
+   Add these lines to the BOTTOM of src/app/globals.css
+   ───────────────────────────────────────────────────────────────────────── */
+
+/* While any card is being dragged, pulse the For Review sidebar link */
+.ht-drag-active [data-review-drop] {
+  animation: ht-review-pulse 1.4s ease-in-out infinite;
+  transition: background-color 0.15s, color 0.15s, transform 0.15s;
+}
+
+/* When the drag ghost hovers over the For Review link */
+[data-review-drop].drag-hover {
+  background-color: #d97706 !important; /* amber-600 */
+  color: white !important;
+  transform: scale(1.04);
+}
+
+@keyframes ht-review-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.5);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(245, 158, 11, 0);
+  }
+}
+/* ─────────────────────────────────────────────────────────────────────────
+   Drag-and-drop visual feedback for both dashboard pages
+   Add these lines to the BOTTOM of src/app/globals.css
+   ───────────────────────────────────────────────────────────────────────── */
+
+/* ── Candidates page → drag to "For Review" sidebar link (amber) ── */
+.ht-drag-active [data-review-drop] {
+  animation: ht-review-pulse 1.4s ease-in-out infinite;
+  transition: background-color 0.15s, color 0.15s, transform 0.15s;
+}
+
+[data-review-drop].drag-hover {
+  background-color: #d97706 !important; /* amber-600 */
+  color: white !important;
+  transform: scale(1.04);
+}
+
+@keyframes ht-review-pulse {
+  0%,
+  100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.5); }
+  50%  { box-shadow: 0 0 0 5px rgba(245, 158, 11, 0); }
+}
+
+/* ── For Review page → drag back to "Candidates" sidebar link (blue) ── */
+.ht-drag-active-review [data-candidates-drop] {
+  animation: ht-candidates-pulse 1.4s ease-in-out infinite;
+  transition: background-color 0.15s, color 0.15s, transform 0.15s;
+}
+
+[data-candidates-drop].candidates-drag-hover {
+  background-color: #1d4ed8 !important; /* blue-700 */
+  color: white !important;
+  transform: scale(1.04);
+}
+
+@keyframes ht-candidates-pulse {
+  0%,
+  100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.5); }
+  50%  { box-shadow: 0 0 0 5px rgba(59, 130, 246, 0); }
+}

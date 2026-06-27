@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { supabase } from "@/lib/supabase";
 
 interface Applicant {
@@ -24,35 +25,97 @@ interface Applicant {
   };
 }
 
-export default function ForReviewDashboard() {
-  const [applicants, setApplicants] = useState<Applicant[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [selectedApplicant, setSelectedApplicant] = useState<Applicant | null>(null);
-  const [movingBackId, setMovingBackId] = useState<string | null>(null);
+interface DragState {
+  id: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  isOverCandidates: boolean;
+  overIndex: number;
+}
 
+/* ── Read-only card snapshot for the drag ghost (amber-tinted) ── */
+function CardSnapshot({ applicant }: { applicant: Applicant }) {
+  return (
+    <div className="bg-white rounded-xl border border-amber-200 overflow-hidden flex flex-col h-full">
+      <div className="p-6 flex items-start space-x-4 border-b border-gray-100">
+        <div className="w-20 h-20 bg-gray-100 rounded-lg overflow-hidden flex-shrink-0 border">
+          {applicant.photo_url ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={applicant.photo_url} alt="" className="w-full h-full object-cover" />
+          ) : (
+            <div className="w-full h-full flex items-center justify-center text-gray-400 text-xs">No Photo</div>
+          )}
+        </div>
+        <div className="overflow-hidden">
+          <h3 className="font-bold text-gray-900 truncate">{applicant.full_name}</h3>
+          <p className="text-xs text-blue-600 font-medium mt-1">{applicant.nationality}</p>
+          <span className="inline-block mt-2 text-[10px] bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full font-semibold">
+            For Review
+          </span>
+        </div>
+      </div>
+      <div className="p-6 space-y-2 text-sm text-gray-600 flex-grow">
+        <div className="flex justify-between">
+          <span className="text-gray-400">Gender:</span>
+          <span className="font-medium">{applicant.gender}</span>
+        </div>
+        <div className="flex justify-between">
+          <span className="text-gray-400">Location:</span>
+          <span className="font-medium">{applicant.form_data?.currentLocation || "N/A"}</span>
+        </div>
+        <div className="flex justify-between">
+          <span className="text-gray-400">Education:</span>
+          <span className="font-medium">{applicant.form_data?.education || "N/A"}</span>
+        </div>
+      </div>
+      <div className="px-4 py-3 bg-amber-50 border-t border-amber-100">
+        <span className="text-xs text-gray-400">Applied: {new Date(applicant.created_at).toLocaleDateString()}</span>
+      </div>
+    </div>
+  );
+}
+
+export default function ForReviewDashboard() {
+  const [applicants, setApplicants]      = useState<Applicant[]>([]);
+  const [loading, setLoading]            = useState(true);
+  const [selectedApplicant, setSelected] = useState<Applicant | null>(null);
+  const [movingBackId, setMovingBackId]  = useState<string | null>(null);
+  const [pressingId, setPressingId]      = useState<string | null>(null);
+  const [dragState, setDragState]        = useState<DragState | null>(null);
+  const [sortedIds, setSortedIds]        = useState<string[]>([]);
+
+  const cardRefs    = useRef<Map<string, HTMLDivElement>>(new Map());
+  const dragRef     = useRef<DragState | null>(null);
+  const sortedRef   = useRef<string[]>([]);
+  const wasDragging = useRef(false);
+
+  useEffect(() => { dragRef.current   = dragState;  }, [dragState]);
+  useEffect(() => { sortedRef.current = sortedIds; }, [sortedIds]);
+
+  /* ── Fetch ── */
   useEffect(() => {
-    async function fetchApplicants() {
+    (async () => {
       try {
         const { data, error } = await supabase
           .from("applicants")
           .select("*")
           .eq("status", "For Review")
           .order("created_at", { ascending: false });
-
         if (error) throw error;
         setApplicants(data || []);
-      } catch (error: any) {
-        console.error("Error fetching data:", error.message);
+        setSortedIds((data || []).map((a) => a.id));
+      } catch (e: any) {
+        console.error(e.message);
       } finally {
         setLoading(false);
       }
-    }
-
-    fetchApplicants();
+    })();
   }, []);
 
-  const handleMoveBack = async (id: string, e: React.MouseEvent) => {
-    e.stopPropagation();
+  /* ── Move back to Candidates (also called from drag-drop) ── */
+  const handleMoveBack = useCallback(async (id: string) => {
     setMovingBackId(id);
     try {
       const { error } = await supabase
@@ -60,17 +123,130 @@ export default function ForReviewDashboard() {
         .update({ status: "New" })
         .eq("id", id);
       if (error) throw error;
-      setApplicants(prev => prev.filter(a => a.id !== id));
+      setApplicants((p) => p.filter((a) => a.id !== id));
+      setSortedIds((p) => p.filter((i) => i !== id));
+      setSelected((p) => (p?.id === id ? null : p));
     } catch (err: any) {
       alert("Failed to move back: " + err.message);
     } finally {
       setMovingBackId(null);
     }
-  };
+  }, []);
 
-  if (loading) {
-    return <div className="text-center py-12 text-gray-500">Loading candidates for review...</div>;
-  }
+  /* ── Find which grid slot the cursor is hovering over ── */
+  const findOverIndex = useCallback((mx: number, my: number, dragId: string): number => {
+    const ids = sortedRef.current;
+    for (let i = 0; i < ids.length; i++) {
+      if (ids[i] === dragId) continue;
+      const el = cardRefs.current.get(ids[i]);
+      if (!el) continue;
+      const r = el.getBoundingClientRect();
+      if (mx >= r.left && mx <= r.right && my >= r.top && my <= r.bottom) return i;
+    }
+    return -1;
+  }, []);
+
+  /* ── Card mousedown ── */
+  const handleCardMouseDown = useCallback((e: React.MouseEvent, applicant: Applicant) => {
+    if (e.button !== 0 || movingBackId) return;
+    e.preventDefault();
+
+    const el = cardRefs.current.get(applicant.id);
+    if (!el) return;
+    const { width, height } = el.getBoundingClientRect();
+    const ox = e.clientX, oy = e.clientY;
+    setPressingId(applicant.id);
+
+    const activate = (mx: number, my: number) => {
+      wasDragging.current = true;
+      document.body.classList.add("ht-drag-active-review");
+      setPressingId(null);
+      setDragState({ id: applicant.id, x: mx, y: my, w: width, h: height, isOverCandidates: false, overIndex: -1 });
+    };
+
+    const onMove = (me: MouseEvent) => {
+      if (Math.hypot(me.clientX - ox, me.clientY - oy) >= 8) { cleanup(); activate(me.clientX, me.clientY); }
+    };
+    const onUp   = () => { setPressingId(null); cleanup(); };
+    const cleanup = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }, [movingBackId]);
+
+  /* ── Active drag tracking ── */
+  useEffect(() => {
+    if (!dragState) return;
+
+    const candidatesEl = () => document.querySelector<HTMLElement>("[data-candidates-drop]");
+
+    const onMove = (e: MouseEvent) => {
+      const el = candidatesEl();
+      let isOverCandidates = false;
+      if (el) {
+        const r = el.getBoundingClientRect();
+        isOverCandidates = e.clientX >= r.left && e.clientX <= r.right &&
+                           e.clientY >= r.top  && e.clientY <= r.bottom;
+        el.classList.toggle("candidates-drag-hover", isOverCandidates);
+      }
+      const overIndex = findOverIndex(e.clientX, e.clientY, dragRef.current!.id);
+      setDragState((p) => p ? { ...p, x: e.clientX, y: e.clientY, isOverCandidates, overIndex } : null);
+    };
+
+    const onUp = () => {
+      const ds = dragRef.current;
+      candidatesEl()?.classList.remove("candidates-drag-hover");
+      document.body.classList.remove("ht-drag-active-review");
+      setDragState(null);
+      setTimeout(() => { wasDragging.current = false; }, 50);
+      if (!ds) return;
+      if (ds.isOverCandidates) {
+        handleMoveBack(ds.id);
+      } else if (ds.overIndex !== -1) {
+        setSortedIds((prev) => {
+          const from = prev.indexOf(ds.id);
+          const to   = ds.overIndex;
+          if (from === to || from === -1) return prev;
+          const next = [...prev];
+          next.splice(from, 1);
+          next.splice(to, 0, ds.id);
+          return next;
+        });
+      }
+    };
+
+    const noSelect = (e: Event) => e.preventDefault();
+    document.addEventListener("selectstart", noSelect);
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      document.removeEventListener("selectstart", noSelect);
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      candidatesEl()?.classList.remove("candidates-drag-hover");
+      document.body.classList.remove("ht-drag-active-review");
+    };
+  }, [dragState?.id, findOverIndex, handleMoveBack]);
+
+  /* ── Live reorder preview ── */
+  const displayedApplicants = (() => {
+    const sorted = sortedIds.map((id) => applicants.find((a) => a.id === id)).filter(Boolean) as Applicant[];
+    if (!dragState || dragState.overIndex === -1) return sorted;
+    const from = sortedIds.indexOf(dragState.id);
+    const to   = dragState.overIndex;
+    if (from === to || from === -1) return sorted;
+    const result = [...sorted];
+    const [item] = result.splice(from, 1);
+    result.splice(to, 0, item);
+    return result;
+  })();
+
+  const activeApplicant = dragState ? applicants.find((a) => a.id === dragState.id) : null;
+  const dragScale = dragState?.isOverCandidates ? 0.22 : 0.52;
+
+  if (loading) return <div className="text-center py-12 text-gray-500">Loading candidates for review...</div>;
 
   return (
     <div>
@@ -79,84 +255,148 @@ export default function ForReviewDashboard() {
           No candidates are pending review. Send some from the Candidates page to get started.
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-          {applicants.map((applicant) => (
-            <div
-              key={applicant.id}
-              onClick={() => setSelectedApplicant(applicant)}
-              className="bg-white rounded-xl border border-amber-200 shadow-sm overflow-hidden flex flex-col hover:shadow-md transition-shadow cursor-pointer"
-            >
-              <div className="p-6 flex items-start space-x-4 border-b border-gray-100">
-                <div className="w-20 h-20 bg-gray-100 rounded-lg overflow-hidden flex-shrink-0 border">
-                  {applicant.photo_url ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={applicant.photo_url} alt={applicant.full_name} className="w-full h-full object-cover" />
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center text-gray-400 text-xs">No Photo</div>
-                  )}
-                </div>
-                <div className="overflow-hidden">
-                  <h3 className="font-bold text-gray-900 truncate" title={applicant.full_name}>
-                    {applicant.full_name}
-                  </h3>
-                  <p className="text-xs text-blue-600 font-medium mt-1">{applicant.nationality}</p>
-                  <span className="inline-block mt-2 text-[10px] bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full font-semibold">
-                    For Review
-                  </span>
-                </div>
-              </div>
+        <div
+          className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6"
 
-              <div className="p-6 space-y-2 text-sm text-gray-600 flex-grow">
-                <div className="flex justify-between">
-                  <span className="text-gray-400">Gender:</span>
-                  <span className="font-medium">{applicant.gender}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-400">Mobile:</span>
-                  <span className="font-medium">{applicant.mobile}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-400">Location:</span>
-                  <span className="font-medium">{applicant.form_data?.currentLocation || "N/A"}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-400">Education:</span>
-                  <span className="font-medium truncate max-w-[150px]" title={applicant.form_data?.education}>
-                    {applicant.form_data?.education || "N/A"}
-                  </span>
-                </div>
-              </div>
+        >
+          {displayedApplicants.map((applicant) => {
+            const isDragging = dragState?.id === applicant.id;
+            const isPressing = pressingId === applicant.id;
 
-              <div className="px-4 py-3 bg-amber-50 border-t border-amber-100 flex justify-between items-center gap-2">
-                <span className="text-xs text-gray-400">
-                  Applied: {new Date(applicant.created_at).toLocaleDateString()}
-                </span>
-                <div className="flex items-center gap-2 flex-shrink-0">
-                  <button
-                    onClick={(e) => handleMoveBack(applicant.id, e)}
-                    disabled={movingBackId === applicant.id}
-                    className="text-[11px] bg-gray-200 text-gray-700 px-2.5 py-1 rounded-md font-semibold hover:bg-gray-300 transition-colors disabled:cursor-not-allowed whitespace-nowrap"
+            /* Placeholder slot while card is being dragged */
+            if (isDragging) {
+              return (
+                <div
+                  key={applicant.id}
+                  ref={(el) => { el ? cardRefs.current.set(applicant.id, el) : cardRefs.current.delete(applicant.id); }}
+                  className="rounded-xl border-2 border-dashed border-amber-200 bg-amber-50/40 transition-all duration-200"
+                  style={{ height: dragState.h }}
+                />
+              );
+            }
+
+            return (
+              <div
+                key={applicant.id}
+                ref={(el) => { el ? cardRefs.current.set(applicant.id, el) : cardRefs.current.delete(applicant.id); }}
+                onMouseDown={(e) => handleCardMouseDown(e, applicant)}
+                onClick={() => { if (!wasDragging.current) setSelected(applicant); }}
+                style={{
+                  transform:  isPressing ? "scale(0.88)" : "scale(1)",
+                  transition: "transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.18s ease",
+                  cursor:     isPressing ? "grabbing" : "grab",
+                  userSelect: "none",
+                }}
+                className="bg-white rounded-xl border border-amber-200 shadow-sm overflow-hidden flex flex-col hover:shadow-md"
+              >
+                {/* ── Photo + name ── */}
+                <div className="p-6 flex items-start space-x-4 border-b border-gray-100">
+                  <div className="w-20 h-20 bg-gray-100 rounded-lg overflow-hidden flex-shrink-0 border">
+                    {applicant.photo_url ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={applicant.photo_url} alt={applicant.full_name} className="w-full h-full object-cover" />
+                    ) : (
+                      <div className="w-full h-full flex items-center justify-center text-gray-400 text-xs">No Photo</div>
+                    )}
+                  </div>
+                  <div className="overflow-hidden">
+                    <h3 className="font-bold text-gray-900 truncate" title={applicant.full_name}>{applicant.full_name}</h3>
+                    <p className="text-xs text-blue-600 font-medium mt-1">{applicant.nationality}</p>
+                    <span className="inline-block mt-2 text-[10px] bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full font-semibold">
+                      For Review
+                    </span>
+                  </div>
+                </div>
+
+                {/* ── Details ── */}
+                <div className="p-6 space-y-2 text-sm text-gray-600 flex-grow">
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">Gender:</span>
+                    <span className="font-medium">{applicant.gender}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">Mobile:</span>
+                    <span className="font-medium">{applicant.mobile}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">Location:</span>
+                    <span className="font-medium">{applicant.form_data?.currentLocation || "N/A"}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">Education:</span>
+                    <span className="font-medium truncate max-w-[150px]" title={applicant.form_data?.education}>
+                      {applicant.form_data?.education || "N/A"}
+                    </span>
+                  </div>
+                </div>
+
+                {/* ── Footer ── */}
+                <div className="px-4 py-3 bg-amber-50 border-t border-amber-100 flex justify-between items-center gap-2">
+                  <span className="text-xs text-gray-400">Applied: {new Date(applicant.created_at).toLocaleDateString()}</span>
+                  <div
+                    className="flex items-center gap-2 flex-shrink-0"
+                    onMouseDown={(e) => e.stopPropagation()}
                   >
-                    {movingBackId === applicant.id ? "Moving..." : "Move Back"}
-                  </button>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); setSelectedApplicant(applicant); }}
-                    className="text-xs text-blue-600 hover:text-blue-800 font-semibold transition-colors whitespace-nowrap"
-                  >
-                    View
-                  </button>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleMoveBack(applicant.id); }}
+                      disabled={!!movingBackId}
+                      className="text-[11px] bg-gray-200 text-gray-700 px-2.5 py-1 rounded-md font-semibold hover:bg-gray-300 transition-colors disabled:cursor-not-allowed whitespace-nowrap"
+                    >
+                      {movingBackId === applicant.id ? "Moving…" : "Move Back"}
+                    </button>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setSelected(applicant); }}
+                      className="text-xs text-blue-600 hover:text-blue-800 font-semibold whitespace-nowrap"
+                    >
+                      View
+                    </button>
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
+
+      {/* ── Drag ghost portal ─────────────────────────────────────────────
+          Same two-div split as RecruiterDashboard:
+          outer = cursor position (no transition)
+          inner = scale with smooth CSS transition
+      ──────────────────────────────────────────────────────────────────── */}
+      {dragState && activeApplicant && typeof document !== "undefined" &&
+        createPortal(
+          <div
+            style={{
+              position: "fixed",
+              left: dragState.x,
+              top:  dragState.y,
+              pointerEvents: "none",
+              zIndex: 9999,
+              willChange: "left, top",
+            }}
+          >
+            <div
+              style={{
+                width:  dragState.w,
+                height: dragState.h,
+                transform: `translate(${-(dragState.w * dragScale) / 2}px, ${-(dragState.h * dragScale) / 2}px) scale(${dragScale})`,
+                transformOrigin: "top left",
+                transition: "transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1)",
+                filter: "drop-shadow(0 20px 40px rgba(0,0,0,0.28))",
+              }}
+            >
+              <CardSnapshot applicant={activeApplicant} />
+            </div>
+          </div>,
+          document.body
+        )
+      }
 
       {/* ── Profile Modal ── */}
       {selectedApplicant && (
         <div
           className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm"
-          onClick={() => setSelectedApplicant(null)}
+          onClick={() => setSelected(null)}
         >
           <div
             className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto shadow-xl border border-gray-100 flex flex-col"
@@ -164,7 +404,7 @@ export default function ForReviewDashboard() {
           >
             <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-amber-50">
               <h2 className="text-xl font-bold text-gray-800">Candidate Full Profile</h2>
-              <button onClick={() => setSelectedApplicant(null)} className="text-gray-400 hover:text-gray-600 text-2xl font-semibold leading-none p-2">&times;</button>
+              <button onClick={() => setSelected(null)} className="text-gray-400 hover:text-gray-600 text-2xl font-semibold leading-none p-2">&times;</button>
             </div>
 
             <div className="p-6 space-y-6">
@@ -189,62 +429,36 @@ export default function ForReviewDashboard() {
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-4 text-sm">
-                <div className="border-b pb-2">
-                  <span className="text-gray-400 block text-xs uppercase tracking-wider font-semibold">Date of Birth</span>
-                  <span className="font-semibold text-gray-800">{selectedApplicant.date_of_birth ? new Date(selectedApplicant.date_of_birth).toLocaleDateString() : "N/A"}</span>
-                </div>
-                <div className="border-b pb-2">
-                  <span className="text-gray-400 block text-xs uppercase tracking-wider font-semibold">Place of Birth</span>
-                  <span className="font-semibold text-gray-800">{selectedApplicant.form_data?.placeOfBirth || "N/A"}</span>
-                </div>
-                <div className="border-b pb-2">
-                  <span className="text-gray-400 block text-xs uppercase tracking-wider font-semibold">Gender</span>
-                  <span className="font-semibold text-gray-800">{selectedApplicant.gender}</span>
-                </div>
-                <div className="border-b pb-2">
-                  <span className="text-gray-400 block text-xs uppercase tracking-wider font-semibold">Mobile Phone</span>
-                  <span className="font-semibold text-gray-800">{selectedApplicant.mobile}</span>
-                </div>
-                <div className="border-b pb-2">
-                  <span className="text-gray-400 block text-xs uppercase tracking-wider font-semibold">Current Location</span>
-                  <span className="font-semibold text-gray-800">{selectedApplicant.form_data?.currentLocation || "N/A"}</span>
-                </div>
-                <div className="border-b pb-2">
-                  <span className="text-gray-400 block text-xs uppercase tracking-wider font-semibold">Education Level</span>
-                  <span className="font-semibold text-gray-800">{selectedApplicant.form_data?.education || "N/A"}</span>
-                </div>
-                <div className="border-b pb-2">
-                  <span className="text-gray-400 block text-xs uppercase tracking-wider font-semibold">Religion</span>
-                  <span className="font-semibold text-gray-800">{selectedApplicant.form_data?.religion || "N/A"}</span>
-                </div>
-                <div className="border-b pb-2">
-                  <span className="text-gray-400 block text-xs uppercase tracking-wider font-semibold">Marital Status</span>
-                  <span className="font-semibold text-gray-800">{selectedApplicant.form_data?.maritalStatus || "N/A"}</span>
-                </div>
-                <div className="border-b pb-2">
-                  <span className="text-gray-400 block text-xs uppercase tracking-wider font-semibold">Height</span>
-                  <span className="font-semibold text-gray-800">{selectedApplicant.form_data?.height ? `${selectedApplicant.form_data.height} cm` : "N/A"}</span>
-                </div>
-                <div className="border-b pb-2">
-                  <span className="text-gray-400 block text-xs uppercase tracking-wider font-semibold">Weight</span>
-                  <span className="font-semibold text-gray-800">{selectedApplicant.form_data?.weight ? `${selectedApplicant.form_data.weight} kg` : "N/A"}</span>
-                </div>
+                {([
+                  ["Date of Birth",    selectedApplicant.date_of_birth ? new Date(selectedApplicant.date_of_birth).toLocaleDateString() : "N/A"],
+                  ["Place of Birth",   selectedApplicant.form_data?.placeOfBirth    || "N/A"],
+                  ["Gender",           selectedApplicant.gender],
+                  ["Mobile Phone",     selectedApplicant.mobile],
+                  ["Current Location", selectedApplicant.form_data?.currentLocation || "N/A"],
+                  ["Education Level",  selectedApplicant.form_data?.education        || "N/A"],
+                  ["Religion",         selectedApplicant.form_data?.religion         || "N/A"],
+                  ["Marital Status",   selectedApplicant.form_data?.maritalStatus    || "N/A"],
+                  ["Height",           selectedApplicant.form_data?.height ? `${selectedApplicant.form_data.height} cm` : "N/A"],
+                  ["Weight",           selectedApplicant.form_data?.weight ? `${selectedApplicant.form_data.weight} kg` : "N/A"],
+                ] as [string, string][]).map(([label, value]) => (
+                  <div key={label} className="border-b pb-2">
+                    <span className="text-gray-400 block text-xs uppercase tracking-wider font-semibold">{label}</span>
+                    <span className="font-semibold text-gray-800">{value}</span>
+                  </div>
+                ))}
               </div>
             </div>
 
             <div className="p-6 border-t border-gray-100 bg-amber-50 flex justify-between items-center gap-3">
               <button
-                onClick={(e) => {
-                  setSelectedApplicant(null);
-                  handleMoveBack(selectedApplicant.id, e);
-                }}
+                onClick={() => { setSelected(null); handleMoveBack(selectedApplicant.id); }}
                 disabled={movingBackId === selectedApplicant.id}
                 className="bg-gray-200 text-gray-700 px-5 py-2.5 rounded-lg text-sm font-medium hover:bg-gray-300 transition-colors disabled:opacity-50"
               >
-                Move Back to Candidates
+                {movingBackId === selectedApplicant.id ? "Moving…" : "Move Back to Candidates"}
               </button>
               <button
-                onClick={() => setSelectedApplicant(null)}
+                onClick={() => setSelected(null)}
                 className="bg-amber-500 text-white px-5 py-2.5 rounded-lg text-sm font-medium hover:bg-amber-600 transition-colors"
               >
                 Close

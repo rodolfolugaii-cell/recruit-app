@@ -100,12 +100,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         {/* Nav Links */}
         <nav className="flex-1 p-2 space-y-1 overflow-hidden">
 
-          <Link href="/dashboard" title="Candidates" className={navClass("/dashboard")}>
+          <Link href="/dashboard" title="Candidates" data-candidates-drop="true" className={navClass("/dashboard")}>
             <span className="text-xl leading-none flex-shrink-0">🧑‍💼</span>
             {!collapsed && <span className="whitespace-nowrap">Candidates</span>}
           </Link>
 
-          <Link href="/dashboard/review" title="For Review" className={navClass("/dashboard/review")}>
+          <Link href="/dashboard/review" title="For Review" data-review-drop="true" className={navClass("/dashboard/review")}>
             <span className="text-xl leading-none flex-shrink-0">📋</span>
             {!collapsed && <span className="whitespace-nowrap">For Review</span>}
           </Link>
