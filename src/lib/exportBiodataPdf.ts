@@ -378,7 +378,8 @@ export async function exportBiodataPdf(applicant: ApplicantForExport): Promise<v
 
   // 7. Save and trigger browser download
   const bytes    = await pdfDoc.save();
-  const blob     = new Blob([bytes], { type: "application/pdf" });
+  // TypeScript strict-mode fix: cast buffer — pdf-lib never returns SharedArrayBuffer
+  const blob     = new Blob([bytes.buffer as ArrayBuffer], { type: "application/pdf" });
   const url      = URL.createObjectURL(blob);
   const link     = document.createElement("a");
   const safeName = (applicant.full_name ?? "Applicant")
