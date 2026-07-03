@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { supabase } from "@/lib/supabase";
+import { exportBiodataPdf, type ApplicantForExport } from "@/lib/exportBiodataPdf";
 
 interface WorkExperienceEntry {
   yearsOfEmployment: string; dateFrom: string; dateTo: string;
@@ -188,6 +189,7 @@ export default function ForReviewDashboard() {
   const [loading, setLoading]            = useState(true);
   const [selectedApplicant, setSelected] = useState<Applicant | null>(null);
   const [movingBackId, setMovingBackId]  = useState<string | null>(null);
+  const [exporting, setExporting]        = useState(false);
   const [pressingId, setPressingId]      = useState<string | null>(null);
   const [dragState, setDragState]        = useState<DragState | null>(null);
   const [sortedIds, setSortedIds]        = useState<string[]>([]);
@@ -239,6 +241,19 @@ export default function ForReviewDashboard() {
       setMovingBackId(null);
     }
   }, []);
+
+  /* ── Export filled biodata PDF ── */
+  const handleExportPdf = useCallback(async () => {
+    if (!selectedApplicant) return;
+    setExporting(true);
+    try {
+      await exportBiodataPdf(selectedApplicant as ApplicantForExport);
+    } catch (err: any) {
+      alert("Export failed: " + (err?.message ?? "Unknown error"));
+    } finally {
+      setExporting(false);
+    }
+  }, [selectedApplicant]);
 
   /* ── Find which grid slot the cursor is hovering over ── */
   const findOverIndex = useCallback((mx: number, my: number, dragId: string): number => {
@@ -810,12 +825,28 @@ export default function ForReviewDashboard() {
               >
                 {movingBackId === selectedApplicant.id ? "Moving…" : "Move Back to Candidates"}
               </button>
-              <button
-                onClick={() => setSelected(null)}
-                className="bg-amber-500 text-white px-5 py-2.5 rounded-lg text-sm font-medium hover:bg-amber-600 transition-colors"
-              >
-                Close
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleExportPdf}
+                  disabled={exporting}
+                  className="flex items-center gap-2 bg-slate-800 text-white px-5 py-2.5 rounded-lg text-sm font-medium hover:bg-slate-700 transition-colors disabled:opacity-50"
+                >
+                  {exporting ? (
+                    <>
+                      <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin inline-block" />
+                      Generating PDF…
+                    </>
+                  ) : (
+                    "📄 Export Biodata PDF"
+                  )}
+                </button>
+                <button
+                  onClick={() => setSelected(null)}
+                  className="bg-amber-500 text-white px-5 py-2.5 rounded-lg text-sm font-medium hover:bg-amber-600 transition-colors"
+                >
+                  Close
+                </button>
+              </div>
             </div>
           </div>
         </div>

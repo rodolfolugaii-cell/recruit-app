@@ -39,7 +39,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     router.push("/login");
   };
 
-  // Dynamic class for nav links based on current route
   const navClass = (path: string) => `
     flex items-center py-2.5 rounded-lg text-sm font-medium transition-colors
     ${pathname === path
@@ -49,9 +48,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     ${collapsed ? "justify-center px-0" : "px-4 space-x-3"}
   `;
 
-  // Dynamic page title based on current route
+  // ── Updated: handles all dashboard routes ────────────────────────────────
   const pageTitle =
-    pathname === "/dashboard/review" ? "For Review" : "Application Submissions";
+    pathname === "/dashboard/review"     ? "For Review"       :
+    pathname === "/dashboard/pdf-mapper" ? "PDF Field Mapper" :
+    "Application Submissions";
 
   if (checkingAuth) {
     return (
@@ -110,7 +111,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             {!collapsed && <span className="whitespace-nowrap">For Review</span>}
           </Link>
 
-          {/* Coming Soon */}
+          {/* ── NEW: PDF Mapper ──────────────────────────────────────── */}
+          <Link href="/dashboard/pdf-mapper" title="PDF Field Mapper" className={navClass("/dashboard/pdf-mapper")}>
+            <span className="text-xl leading-none flex-shrink-0">📌</span>
+            {!collapsed && <span className="whitespace-nowrap">PDF Mapper</span>}
+          </Link>
+
+          {/* Divider */}
           {!collapsed ? (
             <div className="px-4 py-2 text-xs font-semibold text-slate-500 uppercase tracking-wider mt-4">
               Coming Soon
