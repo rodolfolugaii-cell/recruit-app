@@ -52,6 +52,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const pageTitle =
     pathname === "/dashboard/review"     ? "For Review"       :
     pathname === "/dashboard/pdf-mapper" ? "PDF Field Mapper" :
+    pathname === "/dashboard/trash"      ? "Trash"            :
     "Application Submissions";
 
   if (checkingAuth) {
@@ -115,6 +116,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           <Link href="/dashboard/pdf-mapper" title="PDF Field Mapper" className={navClass("/dashboard/pdf-mapper")}>
             <span className="text-xl leading-none flex-shrink-0">📌</span>
             {!collapsed && <span className="whitespace-nowrap">PDF Mapper</span>}
+          </Link>
+
+          {/* ── Trash — restore or permanently delete candidates ─────── */}
+          <Link href="/dashboard/trash" title="Trash" className={navClass("/dashboard/trash")}>
+            <span className="text-xl leading-none flex-shrink-0">🗑️</span>
+            {!collapsed && <span className="whitespace-nowrap">Trash</span>}
           </Link>
 
           {/* Divider */}

@@ -10,14 +10,31 @@
  * ────────────────────────────────────────────────────────────────────────────
  */
 
-import { PDFDocument, rgb, StandardFonts, LineCapStyle } from "pdf-lib";
+import { PDFDocument, rgb, StandardFonts, LineCapStyle, PDFFont } from "pdf-lib";
 import { supabase } from "./supabase";
 
 // ── PDF coordinate constants ──────────────────────────────────────────────────
 const PDF_W    = 595.276;
 const PDF_H    = 841.89;
 const BUCKET   = "pdf-templates";
-const TXT_SIZE = 8;   // pt — general text
+const TXT_SIZE = 8;   // pt — fallback text size when nothing is configured
+
+// ── Checkbox geometry ─────────────────────────────────────────────────────────
+// PDF Mapper draws every checkbox marker as a fixed CHECKBOX_SIZE square
+// anchored at (x, y) — whatever w/h the row happens to store. These constants
+// are shared with the mapper so the preview and the print agree exactly.
+export const CHECKBOX_SIZE = 12;   // pt — the marker square in PDF Mapper
+export const TICK_SIZE     = 9;    // pt — overall span of the drawn ✓
+export const TICK_WEIGHT   = 1.4;  // pt — stroke thickness
+// Arm proportions, relative to TICK_SIZE, measured from the vertex
+export const TICK_LEFT_DX  = 0.35;
+export const TICK_LEFT_DY  = 0.50;
+export const TICK_RIGHT_DX = 0.65;
+export const TICK_RIGHT_DY = 0.80;
+
+// Row in pdf_field_mappings that stores global settings (not a real field).
+// Its font_size is the default applied to any field without its own size.
+const SETTINGS_ROW_ID = "__settings__";
 
 // ── Types (mirror the ForReviewDashboard interfaces) ─────────────────────────
 interface FieldMapping {
@@ -28,6 +45,7 @@ interface FieldMapping {
   y:          number;  // from TOP of page (pdfplumber convention)
   w:          number;
   h:          number;
+  font_size?: number | null;  // pt — null/absent = use the global default
 }
 
 export interface WEEntry {
@@ -55,6 +73,7 @@ export interface ApplicantForExport {
   gender:        string;
   mobile:        string;
   photo_url:     string;
+  signature_url?: string | null;
   form_data: {
     placeOfBirth?:      string;
     currentLocation?:   string;
@@ -93,15 +112,58 @@ export interface ApplicantForExport {
 
 // ── In-session cache (avoids re-fetching on every export) ─────────────────────
 let _mappingsCache: FieldMapping[] | null = null;
+let _defaultTxtSize = TXT_SIZE;
 const _imgCache = new Map<number, Uint8Array>();
+
+/**
+ * Drop the cached mappings / template images so the next export re-fetches.
+ * Called by PDF Mapper after saving, so size and position changes show up
+ * immediately without a page reload.
+ */
+export function resetBiodataPdfCache(): void {
+  _mappingsCache  = null;
+  _defaultTxtSize = TXT_SIZE;
+  _imgCache.clear();
+}
 
 async function fetchMappings(): Promise<FieldMapping[]> {
   if (_mappingsCache) return _mappingsCache;
   const { data, error } = await supabase.from("pdf_field_mappings").select("*");
   if (error) throw new Error(`Could not load field mappings: ${error.message}`);
   if (!data?.length) throw new Error("No field mappings found. Set them up in PDF Mapper first.");
-  _mappingsCache = data as FieldMapping[];
+
+  const rows = data as FieldMapping[];
+
+  // Pull the global default text size out of the settings row, then drop it —
+  // it is not a real field and must never be stamped onto the page.
+  const settings  = rows.find(r => r.field_id === SETTINGS_ROW_ID);
+  _defaultTxtSize = settings?.font_size && settings.font_size > 0
+    ? settings.font_size
+    : TXT_SIZE;
+
+  _mappingsCache = rows.filter(r => r.field_id !== SETTINGS_ROW_ID);
+  if (!_mappingsCache.length) throw new Error("No field mappings found. Set them up in PDF Mapper first.");
   return _mappingsCache;
+}
+
+// Per-field size, falling back to the global default
+function sizeFor(m: FieldMapping): number {
+  return m.font_size && m.font_size > 0 ? m.font_size : _defaultTxtSize;
+}
+
+/**
+ * Shrink `text` with a trailing ellipsis until it fits `maxW` at `size`.
+ * Uses real Helvetica glyph widths rather than a character-count estimate,
+ * so truncation stays correct at any font size.
+ */
+function fitText(text: string, font: PDFFont, size: number, maxW: number): string {
+  if (maxW <= 0) return "";
+  if (font.widthOfTextAtSize(text, size) <= maxW) return text;
+  let t = text;
+  while (t.length > 1 && font.widthOfTextAtSize(`${t}…`, size) > maxW) {
+    t = t.slice(0, -1);
+  }
+  return `${t}…`;
 }
 
 async function fetchPageImage(page: number): Promise<Uint8Array> {
@@ -324,9 +386,34 @@ export async function exportBiodataPdf(applicant: ApplicantForExport): Promise<v
     }
   }
 
+  // 5b. Embed the signature, scaled to FIT its box rather than stretched.
+  // The pad exports a transparent PNG cropped to the ink, so preserving the
+  // aspect ratio is what keeps handwriting from looking squashed.
+  const sigMap = mappings.find(m => m.field_id === "signature");
+  if (sigMap && applicant.signature_url) {
+    try {
+      const res     = await fetch(applicant.signature_url);
+      const sigData = new Uint8Array(await res.arrayBuffer());
+      const sigImg  = await pdfDoc.embedPng(sigData);
+
+      const scale = Math.min(sigMap.w / sigImg.width, sigMap.h / sigImg.height);
+      const w     = sigImg.width  * scale;
+      const h     = sigImg.height * scale;
+
+      pages[sigMap.page - 1].drawImage(sigImg, {
+        x:      sigMap.x + (sigMap.w - w) / 2,   // centred in the mapped box
+        y:      toLibY(sigMap) + (sigMap.h - h) / 2,
+        width:  w,
+        height: h,
+      });
+    } catch {
+      // Signature failed or the applicant predates the feature — leave it blank
+    }
+  }
+
   // 6. Stamp every mapped field
   for (const m of mappings) {
-    if (m.field_id === "photo") continue;
+    if (m.field_id === "photo" || m.field_id === "signature") continue;
 
     const value = values[m.field_id];
     if (value === undefined || value === null || value === "" || value === false) continue;
@@ -337,39 +424,41 @@ export async function exportBiodataPdf(applicant: ApplicantForExport): Promise<v
     const libY = toLibY(m);
 
     if (m.field_type === "checkbox" && value === true) {
-      // Draw a ✓ checkmark centred in the checkbox zone using two line segments
-      // The ✓ has a short left-arm going down and a longer right-arm going up
-      const sz  = Math.min(9, m.h - 2, m.w - 2);
-      const bx  = m.x  + (m.w - sz) / 2;    // left edge of checkmark area
-      const by  = libY + (m.h - sz) / 2;    // bottom edge of checkmark area
+      // The VERTEX of the ✓ — where the two strokes meet — lands exactly on the
+      // centre of the square drawn in PDF Mapper. Previously the tick's bounding
+      // box was centred instead, which pushed the point down-left of the target.
+      //
+      // The centre is derived from CHECKBOX_SIZE, not m.w/m.h, because the mapper
+      // renders checkboxes at that fixed size whatever the row stores. Rows that
+      // kept text-shaped defaults (w = 100, h = 14) would otherwise put the tick
+      // tens of points away from where the recruiter clicked.
+      const cx = m.x + CHECKBOX_SIZE / 2;
+      const cy = PDF_H - (m.y + CHECKBOX_SIZE / 2);   // top-left origin → pdf-lib
 
-      // Left arm: from upper-left down to the kink point
+      // Short arm: down from upper-left into the vertex
       page.drawLine({
-        start:     { x: bx,             y: by + sz * 0.50 },
-        end:       { x: bx + sz * 0.35, y: by             },
-        thickness: 1.4,
+        start:     { x: cx - TICK_SIZE * TICK_LEFT_DX, y: cy + TICK_SIZE * TICK_LEFT_DY },
+        end:       { x: cx,                            y: cy },
+        thickness: TICK_WEIGHT,
         color:     black,
         lineCap:   LineCapStyle.Round,
       });
-      // Right arm: from the kink point up to upper-right
+      // Long arm: up from the vertex to the upper-right
       page.drawLine({
-        start:     { x: bx + sz * 0.35, y: by             },
-        end:       { x: bx + sz,        y: by + sz * 0.80 },
-        thickness: 1.4,
+        start:     { x: cx,                             y: cy },
+        end:       { x: cx + TICK_SIZE * TICK_RIGHT_DX, y: cy + TICK_SIZE * TICK_RIGHT_DY },
+        thickness: TICK_WEIGHT,
         color:     black,
         lineCap:   LineCapStyle.Round,
       });
     } else if (typeof value === "string" && value.trim() !== "") {
-      // Truncate text to stay within the field width
-      // Rough estimate: each char ≈ font_size × 0.55 wide for Helvetica
-      const maxChars = Math.max(1, Math.floor((m.w - 2) / (TXT_SIZE * 0.55)));
-      const text     = value.length > maxChars
-        ? value.substring(0, maxChars - 1) + "…"
-        : value;
+      // Per-field size (falls back to the global default set in PDF Mapper)
+      const size = sizeFor(m);
+      const text = fitText(value, font, size, m.w - 2);
       page.drawText(text, {
         x:    m.x + 1,
         y:    libY + 2,   // 2pt padding from the bottom of the field zone
-        size: TXT_SIZE,
+        size,
         font,
         color: black,
       });

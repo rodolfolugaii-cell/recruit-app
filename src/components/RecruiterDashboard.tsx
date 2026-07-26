@@ -3,6 +3,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { supabase } from "@/lib/supabase";
+import {
+  TrashDropZone, DeleteConfirmDialog, UndoToast,
+  isPointOverTrash, DELETED_STATUS,
+} from "@/components/TrashZone";
 
 interface WorkExperienceEntry {
   yearsOfEmployment: string; dateFrom: string; dateTo: string;
@@ -19,6 +23,8 @@ interface Applicant {
   gender: string;
   mobile: string;
   photo_url: string;
+  signature_url?: string | null;
+  signed_at?: string | null;
   status: string;
   form_data: {
     placeOfBirth?: string;       currentLocation?: string;
@@ -45,7 +51,15 @@ interface DragState {
   w: number;
   h: number;
   isOverReview: boolean;
+  isOverTrash: boolean;
   overIndex: number;
+}
+
+/** A trashed card held aside so Undo can put it back where it was */
+interface PendingUndo {
+  applicant: Applicant;
+  index: number;       // position it occupied in sortedIds
+  prevStatus: string;  // status to restore
 }
 
 /* ── Read-only card used inside the drag ghost (no buttons/events) ── */
@@ -194,15 +208,23 @@ export default function RecruiterDashboard() {
   const [dragState, setDragState]           = useState<DragState | null>(null);
   const [sortedIds, setSortedIds]           = useState<string[]>([]);
 
+  /* ── Trash ── */
+  const [confirmDelete, setConfirmDelete]   = useState<Applicant | null>(null);
+  const [deleting, setDeleting]             = useState(false);
+  const [pendingUndo, setPendingUndo]       = useState<PendingUndo | null>(null);
+  const [undoing, setUndoing]               = useState(false);
+
   // Refs so event-listener closures always see fresh state
   const cardRefs          = useRef<Map<string, HTMLDivElement>>(new Map());
   const cardRectsSnapshot = useRef<Map<string, DOMRect>>(new Map()); // stable snapshot taken at drag-start
   const dragRef           = useRef<DragState | null>(null);
   const sortedRef     = useRef<string[]>([]);
+  const applicantsRef = useRef<Applicant[]>([]);   // fresh list for drag-end handlers
   const wasDragging   = useRef(false);         // suppresses click-to-open after a drag
 
   useEffect(() => { dragRef.current   = dragState;  }, [dragState]);
   useEffect(() => { sortedRef.current = sortedIds; }, [sortedIds]);
+  useEffect(() => { applicantsRef.current = applicants; }, [applicants]);
 
   /* ── Fetch ── */
   useEffect(() => {
@@ -213,7 +235,9 @@ export default function RecruiterDashboard() {
           .select("*")
           .order("created_at", { ascending: false });
         if (error) throw error;
-        const filtered = (data || []).filter((a) => a.status !== "For Review");
+        const filtered = (data || []).filter(
+          (a) => a.status !== "For Review" && a.status !== DELETED_STATUS
+        );
         setApplicants(filtered);
         setSortedIds(filtered.map((a) => a.id));
       } catch (e: any) {
@@ -242,6 +266,69 @@ export default function RecruiterDashboard() {
       setSendingId(null);
     }
   }, []);
+
+  /* ── Trash (soft delete) ──────────────────────────────────────────────────
+     Sets status to "Deleted" rather than removing the row, so a mis-drop is
+     recoverable — from the Undo toast, or later from the database. ── */
+  const handleConfirmDelete = useCallback(async () => {
+    const target = confirmDelete;
+    if (!target) return;
+    setDeleting(true);
+    try {
+      const { error } = await supabase
+        .from("applicants")
+        .update({
+          status:       DELETED_STATUS,
+          deleted_at:   new Date().toISOString(),
+          deleted_from: target.status || "New",   // the Trash page restores to this
+        })
+        .eq("id", target.id);
+      if (error) throw error;
+
+      const index = sortedRef.current.indexOf(target.id);
+      setApplicants((p) => p.filter((a) => a.id !== target.id));
+      setSortedIds((p) => p.filter((i) => i !== target.id));
+      setSelected((p) => (p?.id === target.id ? null : p));
+      setConfirmDelete(null);
+      setPendingUndo({ applicant: target, index, prevStatus: target.status || "New" });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      alert(/deleted_at|deleted_from/.test(msg)
+        ? "Trash needs a one-time database update. Run this in the Supabase SQL Editor:\n\n" +
+          "ALTER TABLE applicants\n  ADD COLUMN IF NOT EXISTS deleted_at   TIMESTAMPTZ,\n  ADD COLUMN IF NOT EXISTS deleted_from TEXT;"
+        : "Failed to move to trash: " + msg);
+    } finally {
+      setDeleting(false);
+    }
+  }, [confirmDelete]);
+
+  const handleUndoDelete = useCallback(async () => {
+    const u = pendingUndo;
+    if (!u) return;
+    setUndoing(true);
+    try {
+      const { error } = await supabase
+        .from("applicants")
+        .update({ status: u.prevStatus, deleted_at: null, deleted_from: null })
+        .eq("id", u.applicant.id);
+      if (error) throw error;
+
+      setApplicants((p) => (p.some((a) => a.id === u.applicant.id) ? p : [...p, u.applicant]));
+      setSortedIds((p) => {
+        if (p.includes(u.applicant.id)) return p;
+        const next = [...p];
+        next.splice(u.index < 0 ? next.length : Math.min(u.index, next.length), 0, u.applicant.id);
+        return next;
+      });
+      setPendingUndo(null);
+    } catch (err) {
+      alert("Failed to restore: " + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setUndoing(false);
+    }
+  }, [pendingUndo]);
+
+  const dismissUndo = useCallback(() => setPendingUndo(null), []);
 
   /* ── Find which grid slot the cursor is hovering over ── */
   const findOverIndex = useCallback((mx: number, my: number, dragId: string): number => {
@@ -286,7 +373,7 @@ export default function RecruiterDashboard() {
       wasDragging.current = true;
       document.body.classList.add("ht-drag-active");
       setPressingId(null);
-      setDragState({ id: applicant.id, x: mx, y: my, w: width, h: height, isOverReview: false, overIndex: -1 });
+      setDragState({ id: applicant.id, x: mx, y: my, w: width, h: height, isOverReview: false, isOverTrash: false, overIndex: -1 });
     };
 
     const onMove = (me: PointerEvent) => {
@@ -310,16 +397,21 @@ export default function RecruiterDashboard() {
     const reviewEl = () => document.querySelector<HTMLElement>("[data-review-drop]");
 
     const onMove = (e: PointerEvent) => {
+      // Trash wins over every other target — once the cursor is on the bin,
+      // neither the review link nor a reorder slot should light up.
+      const isOverTrash = isPointOverTrash(e.clientX, e.clientY);
+
       const el = reviewEl();
       let isOverReview = false;
       if (el) {
         const r = el.getBoundingClientRect();
-        isOverReview = e.clientX >= r.left && e.clientX <= r.right &&
+        isOverReview = !isOverTrash &&
+                       e.clientX >= r.left && e.clientX <= r.right &&
                        e.clientY >= r.top  && e.clientY <= r.bottom;
         el.classList.toggle("drag-hover", isOverReview);
       }
-      const overIndex = findOverIndex(e.clientX, e.clientY, dragRef.current!.id);
-      setDragState((p) => p ? { ...p, x: e.clientX, y: e.clientY, isOverReview, overIndex } : null);
+      const overIndex = isOverTrash ? -1 : findOverIndex(e.clientX, e.clientY, dragRef.current!.id);
+      setDragState((p) => p ? { ...p, x: e.clientX, y: e.clientY, isOverReview, isOverTrash, overIndex } : null);
     };
 
     const onUp = () => {
@@ -330,7 +422,11 @@ export default function RecruiterDashboard() {
       // Briefly keep wasDragging true so the card's onClick doesn't fire
       setTimeout(() => { wasDragging.current = false; }, 50);
       if (!ds) return;
-      if (ds.isOverReview) {
+      if (ds.isOverTrash) {
+        // Ask first — nothing is written until the dialog is confirmed
+        const target = applicantsRef.current.find((a) => a.id === ds.id);
+        if (target) setConfirmDelete(target);
+      } else if (ds.isOverReview) {
         handleSendForReview(ds.id);
       } else if (ds.overIndex !== -1) {
         setSortedIds((prev) => {
@@ -376,8 +472,8 @@ export default function RecruiterDashboard() {
   })();
 
   const activeApplicant = dragState ? applicants.find((a) => a.id === dragState.id) : null;
-  // Ghost shrinks further when hovering over the For Review sidebar link
-  const dragScale = dragState?.isOverReview ? 0.22 : 0.52;
+  // Ghost shrinks further when hovering over the For Review link or the bin
+  const dragScale = dragState?.isOverReview || dragState?.isOverTrash ? 0.22 : 0.52;
 
   if (loading) return <div className="text-center py-12 text-gray-500">Loading submissions...</div>;
 
@@ -551,6 +647,25 @@ export default function RecruiterDashboard() {
           document.body
         )
       }
+
+      {/* ── Drag-to-trash ── */}
+      <TrashDropZone
+        visible={applicants.length > 0}
+        dragging={!!dragState}
+        isOver={!!dragState?.isOverTrash}
+      />
+      <DeleteConfirmDialog
+        applicant={confirmDelete}
+        deleting={deleting}
+        onCancel={() => setConfirmDelete(null)}
+        onConfirm={handleConfirmDelete}
+      />
+      <UndoToast
+        name={pendingUndo?.applicant.full_name ?? null}
+        undoing={undoing}
+        onUndo={handleUndoDelete}
+        onDismiss={dismissUndo}
+      />
 
       {/* ── Profile Modal ── */}
       {selectedApplicant && (
@@ -802,7 +917,20 @@ export default function RecruiterDashboard() {
                       </p>
                       <div className="mt-4 flex justify-start">
                         <div className="text-center">
+                          {/* Captured signature sits on the ruled line; blank for
+                              applicants who submitted before signing existed */}
+                          <div className="h-10 flex items-end justify-center">
+                            {ap.signature_url && (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img src={ap.signature_url} alt="Signature" className="max-h-10 max-w-[176px] object-contain" />
+                            )}
+                          </div>
                           <div className="border-t border-gray-500 w-44 pt-1 text-[9px]">Signature of Applicant</div>
+                          {ap.signed_at && (
+                            <div className="text-[8px] text-gray-400 mt-0.5">
+                              Signed {new Date(ap.signed_at).toLocaleDateString()}
+                            </div>
+                          )}
                         </div>
                       </div>
                     </div>

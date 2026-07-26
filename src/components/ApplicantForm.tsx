@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { supabase } from "@/lib/supabase";
+import SignaturePad from "@/components/SignaturePad";
 
 /* ── Types ──────────────────────────────────────────────────────────────── */
 interface WorkExperienceEntry {
@@ -141,6 +142,8 @@ export default function ApplicantForm() {
   const [preview, setPreview] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [submitted, setSubmitted] = useState(false);
+  // Trimmed PNG data URL from the signature pad on the final step
+  const [signature, setSignature] = useState<string | null>(null);
 
   /* ── Updaters ── */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -166,8 +169,10 @@ export default function ApplicantForm() {
 
   /* ── Submit ── */
   const handleSubmit = async () => {
+    if (!signature) { alert("Please sign in the box before submitting."); return; }
     setLoading(true);
     let photoUrl = "";
+    let signatureUrl = "";
     try {
       if (photo) {
         const ext  = photo.name.split(".").pop();
@@ -176,6 +181,16 @@ export default function ApplicantForm() {
         if (upErr) throw upErr;
         photoUrl = supabase.storage.from("applicant-photos").getPublicUrl(path).data.publicUrl;
       }
+
+      // Signature — same bucket as photos, so no extra bucket or policy setup
+      const sigBlob = await (await fetch(signature)).blob();
+      const sigPath = `signatures/${Date.now()}-${Math.random().toString(36).slice(2)}.png`;
+      const { error: sigErr } = await supabase.storage
+        .from("applicant-photos")
+        .upload(sigPath, sigBlob, { contentType: "image/png" });
+      if (sigErr) throw sigErr;
+      signatureUrl = supabase.storage.from("applicant-photos").getPublicUrl(sigPath).data.publicUrl;
+
       const { error } = await supabase.from("applicants").insert([{
         full_name:     data.fullName,
         date_of_birth: data.dob        || null,
@@ -183,6 +198,8 @@ export default function ApplicantForm() {
         gender:        data.gender      || null,
         mobile:        data.mobile      || null,
         photo_url:     photoUrl         || null,
+        signature_url: signatureUrl     || null,
+        signed_at:     new Date().toISOString(),   // when they certified the details
         form_data: {
           placeOfBirth: data.placeOfBirth, currentLocation: data.currentLocation,
           height: data.height, weight: data.weight, maritalStatus: data.maritalStatus,
@@ -203,7 +220,11 @@ export default function ApplicantForm() {
       if (error) throw error;
       setSubmitted(true);
     } catch (err: unknown) {
-      alert("Submission failed: " + (err instanceof Error ? err.message : String(err)));
+      const msg = err instanceof Error ? err.message : String(err);
+      alert(/signature_url|signed_at/.test(msg)
+        ? "Signatures need a one-time database update. Ask your administrator to run:\n\n" +
+          "ALTER TABLE applicants\n  ADD COLUMN IF NOT EXISTS signature_url TEXT,\n  ADD COLUMN IF NOT EXISTS signed_at     TIMESTAMPTZ;"
+        : "Submission failed: " + msg);
     } finally {
       setLoading(false);
     }
@@ -631,6 +652,11 @@ export default function ApplicantForm() {
             <strong className="text-gray-700">CASTILLO DEL REY CONSULTANCY</strong> may disclose my personal profile
             to potential employers for the purpose of seeking employment as Foreign Domestic Helper.
           </div>
+
+          {/* Signature — required, and what gets stamped onto the biodata PDF */}
+          <div className="mt-5">
+            <SignaturePad onChange={setSignature} />
+          </div>
         </div>
       );
 
@@ -681,9 +707,10 @@ export default function ApplicantForm() {
               Next →
             </button>
           ) : (
-            <button type="button" onClick={handleSubmit} disabled={loading}
+            <button type="button" onClick={handleSubmit} disabled={loading || !signature}
+              title={!signature ? "Please sign before submitting" : undefined}
               className="flex-1 bg-blue-600 text-white py-3 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed">
-              {loading ? "Submitting…" : "Submit Application"}
+              {loading ? "Submitting…" : !signature ? "Sign to Submit" : "Submit Application"}
             </button>
           )}
         </div>

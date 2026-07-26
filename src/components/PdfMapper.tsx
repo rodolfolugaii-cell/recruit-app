@@ -19,8 +19,17 @@
 //      y          FLOAT   NOT NULL DEFAULT 0,
 //      w          FLOAT   NOT NULL DEFAULT 100,
 //      h          FLOAT   NOT NULL DEFAULT 14,
+//      font_size  FLOAT,                        -- pt; NULL = use global default
 //      updated_at TIMESTAMPTZ DEFAULT NOW()
 //    );
+//
+// 2b. UPGRADING an existing table? Run this once to add text-size support:
+//
+//    ALTER TABLE pdf_field_mappings ADD COLUMN IF NOT EXISTS font_size FLOAT;
+//
+//    The global default size lives in a reserved row with
+//    field_id = '__settings__'. It is written automatically by "Save All"
+//    and is skipped when generating PDFs.
 //
 // 3. Upload the PDF once using the "📤 Upload PDF" button.
 //    Both pages are rendered and saved to Storage automatically.
@@ -32,10 +41,22 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
+import {
+  resetBiodataPdfCache,
+  CHECKBOX_SIZE, TICK_SIZE, TICK_WEIGHT,
+  TICK_LEFT_DX, TICK_LEFT_DY, TICK_RIGHT_DX, TICK_RIGHT_DY,
+} from "@/lib/exportBiodataPdf";
 
 const PDF_W = 595.276;
 const PDF_H = 841.89;
 const BUCKET = "pdf-templates";
+
+// ── Text size ────────────────────────────────────────────────────────────────
+const DEFAULT_TXT_SIZE = 8;   // pt — matches exportBiodataPdf's fallback
+const MIN_TXT_SIZE     = 4;
+const MAX_TXT_SIZE     = 24;
+// Reserved row that stores the global default size (never stamped on the PDF)
+const SETTINGS_ROW_ID  = "__settings__";
 
 // ── pdfjs loaded from CDN at runtime (no npm install) ────────────────────────
 const PDFJS_CDN = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174";
@@ -104,7 +125,54 @@ async function uploadPageToStorage(
 type FieldType = "text" | "checkbox" | "date" | "image" | "signature";
 interface FieldDef  { id: string; label: string; type: FieldType; defaultW?: number; defaultH?: number; }
 interface Section   { title: string; page: 1 | 2; fields: FieldDef[]; }
-interface Mapping   { field_id: string; label: string; field_type: string; page: number; x: number; y: number; w: number; h: number; }
+interface Mapping   { field_id: string; label: string; field_type: string; page: number; x: number; y: number; w: number; h: number; font_size?: number | null; }
+
+// Only these types print text, so only they get a size control
+const isTextual = (type: string) => type === "text" || type === "date";
+
+// ── Reusable ±0.5pt size stepper ──────────────────────────────────────────────
+// Declared outside the component so the input never remounts (and never loses
+// focus) while typing.
+function SizeStepper({
+  value, onChange, base, title,
+}: {
+  value: number | null;                    // null = inheriting the default
+  onChange: (v: number | null) => void;
+  base: number;                            // value used when stepping from null
+  title?: string;
+}) {
+  const clamp = (n: number) =>
+    Math.min(MAX_TXT_SIZE, Math.max(MIN_TXT_SIZE, parseFloat(n.toFixed(1))));
+  const step = (delta: number) => onChange(clamp((value ?? base) + delta));
+
+  return (
+    <div className="flex items-center bg-white border border-slate-300 rounded-md overflow-hidden" title={title}>
+      <button
+        onClick={() => step(-0.5)}
+        className="w-6 h-6 flex items-center justify-center text-slate-500 hover:bg-slate-100 font-bold text-sm transition-colors"
+        title="Smaller"
+      >−</button>
+      <input
+        type="number" step={0.5} min={MIN_TXT_SIZE} max={MAX_TXT_SIZE}
+        value={value ?? ""}
+        placeholder={String(base)}
+        onChange={e => {
+          const raw = e.target.value;
+          if (raw === "") { onChange(null); return; }
+          const n = parseFloat(raw);
+          onChange(Number.isFinite(n) ? clamp(n) : null);
+        }}
+        className="w-11 h-6 text-center text-xs text-slate-700 tabular-nums border-x border-slate-200 focus:outline-none focus:bg-blue-50 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+      />
+      <button
+        onClick={() => step(0.5)}
+        className="w-6 h-6 flex items-center justify-center text-slate-500 hover:bg-slate-100 font-bold text-sm transition-colors"
+        title="Bigger"
+      >+</button>
+      <span className="px-1.5 text-[10px] text-slate-400 select-none">pt</span>
+    </div>
+  );
+}
 
 const TYPE_STYLE: Record<FieldType, { bg: string; border: string; badge: string; dot: string }> = {
   text:      { bg: "bg-blue-400/20",   border: "border-blue-500",   badge: "bg-blue-100 text-blue-700",    dot: "bg-blue-500"   },
@@ -126,6 +194,7 @@ const SECTIONS: Section[] = [
       { id: "contract_plan_break", label: "Plan to Break",            type: "checkbox" },
       { id: "contract_terminated", label: "Terminated / Break",       type: "checkbox" },
       { id: "last_working_day",    label: "Last Working Day",         type: "text",    defaultW: 66  },
+      { id: "signature",           label: "Applicant Signature",      type: "signature", defaultW: 130, defaultH: 34 },
     ],
   },
   {
@@ -302,6 +371,12 @@ export default function PdfMapper() {
     Object.fromEntries(SECTIONS.map(s => [s.title, true]))
   );
 
+  // ── Text size ────────────────────────────────────────────────────────────────
+  // Global default, applied to every text/date field without its own size
+  const [defaultFontSize, setDefaultFontSize] = useState(DEFAULT_TXT_SIZE);
+  // Draw sample text inside markers so the size is visible on the template
+  const [showTextPreview, setShowTextPreview] = useState(true);
+
   // ── Image state ──────────────────────────────────────────────────────────────
   // Stores the URL (Supabase Storage public URL or temporary data URL)
   const [pageImages, setPageImages]   = useState<Record<number, string>>({});
@@ -379,9 +454,16 @@ export default function PdfMapper() {
       if (error) { showMsg("Could not load mappings — check the Supabase table exists."); return; }
       if (data?.length) {
         const map: Record<string, Mapping> = {};
-        data.forEach((row: Mapping) => { map[row.field_id] = row; });
+        data.forEach((row: Mapping) => {
+          // The settings row carries the global default size, not a field
+          if (row.field_id === SETTINGS_ROW_ID) {
+            if (row.font_size && row.font_size > 0) setDefaultFontSize(row.font_size);
+            return;
+          }
+          map[row.field_id] = row;
+        });
         setMappings(map);
-        showMsg(`Loaded ${data.length} saved mappings`);
+        showMsg(`Loaded ${Object.keys(map).length} saved mappings`);
       }
     })();
   }, []);
@@ -427,6 +509,7 @@ export default function PdfMapper() {
 
       if (!failed) {
         setPageImages(prev => ({ ...prev, ...storageUrls }));
+        resetBiodataPdfCache();  // exports must pick up the new template
         showMsg(`✓ PDF saved to Storage — ${Object.keys(storageUrls).length} pages ready for all recruiters`);
       } else {
         showMsg("⚠️ PDF rendered locally but Storage upload failed. Check bucket exists and is public.");
@@ -448,6 +531,7 @@ export default function PdfMapper() {
 
         if (url) {
           setPageImages(prev => ({ ...prev, [currentPage]: url }));
+          resetBiodataPdfCache();  // exports must pick up the new template
           showMsg(`✓ Page ${currentPage} saved to Storage`);
         } else {
           showMsg("⚠️ Image loaded locally but Storage upload failed. Check bucket exists and is public.");
@@ -589,12 +673,46 @@ export default function PdfMapper() {
 
   // ── Save mappings to Supabase ────────────────────────────────────────────────
   const handleSave = async () => {
-    const rows = Object.values(mappings);
+    const rows = Object.values(mappings).filter(m => m.field_id !== SETTINGS_ROW_ID);
     if (!rows.length) { showMsg("Nothing to save yet."); return; }
     setSaveStatus("saving");
-    const { error } = await supabase.from("pdf_field_mappings").upsert(rows, { onConflict: "field_id" });
-    if (error) { setSaveStatus("error"); showMsg(`Error: ${error.message}`); }
-    else { setSaveStatus("saved"); showMsg(`✓ Saved ${rows.length} mappings`); setTimeout(() => setSaveStatus("idle"), 3000); }
+
+    // Persist the global default alongside the field rows
+    // Send ONLY these columns. Rows loaded with select("*") still carry the
+    // table's own `id` / `updated_at`, and PostgREST unions the keys across a
+    // bulk upsert — so any row missing `id` would be inserted with id = NULL
+    // instead of the gen_random_uuid() default, and the insert would fail.
+    // Omitting `id` everywhere lets the default apply; field_id is the
+    // conflict target, so upserts still match existing rows correctly.
+    const toRow = (m: Mapping) => ({
+      field_id:   m.field_id,
+      label:      m.label,
+      field_type: m.field_type,
+      page:       m.page,
+      x: m.x, y: m.y, w: m.w, h: m.h,
+      font_size:  m.font_size ?? null,
+    });
+
+    const payload = [
+      ...rows.map(toRow),
+      {
+        field_id: SETTINGS_ROW_ID, label: "Global settings", field_type: "settings",
+        page: 0, x: 0, y: 0, w: 0, h: 0, font_size: defaultFontSize,
+      },
+    ];
+
+    const { error } = await supabase.from("pdf_field_mappings").upsert(payload, { onConflict: "field_id" });
+    if (error) {
+      setSaveStatus("error");
+      showMsg(/font_size/.test(error.message)
+        ? "Error: column 'font_size' is missing — run: ALTER TABLE pdf_field_mappings ADD COLUMN IF NOT EXISTS font_size FLOAT;"
+        : `Error: ${error.message}`);
+    } else {
+      setSaveStatus("saved");
+      resetBiodataPdfCache();  // next biodata export picks up the new sizes/positions
+      showMsg(`✓ Saved ${rows.length} mappings`);
+      setTimeout(() => setSaveStatus("idle"), 3000);
+    }
   };
 
   // ── Import from biodata_field_mapping.json ────────────────────────────────────
@@ -610,10 +728,13 @@ export default function PdfMapper() {
         let count = 0;
         raw.forEach(f => {
           const fid = f.id ?? f.field_id ?? "";
-          if (!fid) return;
-          next[fid] = { field_id: fid, label: f.label, field_type: f.type ?? f.field_type ?? "text", page: f.page, x: f.x, y: f.y, w: f.w ?? 100, h: f.h ?? 14 };
+          if (!fid || fid === SETTINGS_ROW_ID) return;
+          next[fid] = { field_id: fid, label: f.label, field_type: f.type ?? f.field_type ?? "text", page: f.page, x: f.x, y: f.y, w: f.w ?? 100, h: f.h ?? 14, font_size: f.font_size ?? f.fontSize ?? null };
           count++;
         });
+        // Older exports have no size info — keep whatever default is set
+        const importedDefault = json.meta?.default_font_size;
+        if (importedDefault > 0) setDefaultFontSize(importedDefault);
         setMappings(next);
         showMsg(`Imported ${count} fields — click 💾 Save All to persist`);
       } catch { showMsg("Error: could not parse JSON file."); }
@@ -629,11 +750,12 @@ export default function PdfMapper() {
 
     const payload = {
       meta: {
-        exported_at:      new Date().toISOString(),
-        page_width_pts:   PDF_W,
-        page_height_pts:  PDF_H,
-        coordinate_origin:"top-left (pdfplumber screen space)",
-        total_fields:     rows.length,
+        exported_at:       new Date().toISOString(),
+        page_width_pts:    PDF_W,
+        page_height_pts:   PDF_H,
+        coordinate_origin: "top-left (pdfplumber screen space)",
+        total_fields:      rows.length,
+        default_font_size: defaultFontSize,
       },
       // Each field stored with both 'id' and 'field_id' so the file is
       // re-importable by this mapper AND compatible with exportBiodataPdf
@@ -645,6 +767,7 @@ export default function PdfMapper() {
         field_type: r.field_type,
         page:       r.page,
         x: r.x, y: r.y, w: r.w, h: r.h,
+        font_size:  r.font_size ?? null,   // null = inherits default_font_size
         pdf_y: parseFloat((PDF_H - r.y - r.h).toFixed(1)),
       })),
     };
@@ -665,10 +788,39 @@ export default function PdfMapper() {
   const showMsg       = (msg: string) => { setStatusMsg(msg); setTimeout(() => setStatusMsg(""), 5000); };
   const toggleSection = (t: string) => setExpanded(p => ({ ...p, [t]: !p[t] }));
 
+  // ── Text size helpers ────────────────────────────────────────────────────────
+  // Size actually used when generating the PDF: the field's own, else the default
+  const effSize = (m: Mapping) => (m.font_size && m.font_size > 0 ? m.font_size : defaultFontSize);
+
+  const setFieldFontSize = (id: string, size: number | null) =>
+    setMappings(p => (p[id] ? { ...p, [id]: { ...p[id], font_size: size } } : p));
+
+  // Push one size onto every mapped text/date field on a page — the usual case
+  // when the whole form prints too small or too large.
+  const applySizeToPage = (size: number, page: number) => {
+    let n = 0;
+    setMappings(prev => {
+      const next = { ...prev };
+      Object.values(prev).forEach(m => {
+        if (m.page === page && isTextual(m.field_type)) { next[m.field_id] = { ...m, font_size: size }; n++; }
+      });
+      return next;
+    });
+    showMsg(`Set ${n} text fields on page ${page} to ${size}pt — click 💾 Save All`);
+  };
+
   const totalFields = SECTIONS.flatMap(s => s.fields).length;
-  const mappedCount = Object.keys(mappings).length;
+  const mappedCount = Object.keys(mappings).filter(id => FIELD_LOOKUP[id]).length;
   const pageFields  = SECTIONS.filter(s => s.page === currentPage).flatMap(s => s.fields);
   const pageMapped  = pageFields.filter(f => mappings[f.id]).length;
+
+  // Currently selected field + its mapping (drives the properties panel)
+  const selMapping  = selectedId ? mappings[selectedId] : undefined;
+  const selDef      = selectedId ? FIELD_LOOKUP[selectedId] : undefined;
+
+  // Rendered size of the PDF panel — used to scale the on-canvas text preview
+  const renderW = Math.round(pdfContW * zoom / 100);
+  const pxPerPt = renderW / PDF_W;
 
   // ── Render ────────────────────────────────────────────────────────────────────
   return (
@@ -742,6 +894,19 @@ export default function PdfMapper() {
 
             <div className="flex-1" />
 
+            {/* Toggle the on-canvas text-size preview */}
+            <button
+              onClick={() => setShowTextPreview(v => !v)}
+              title={showTextPreview ? "Hide text size preview" : "Show text size preview"}
+              className={`px-2.5 h-9 rounded-lg text-sm font-medium transition-colors border ${
+                showTextPreview
+                  ? "bg-slate-800 text-white border-slate-800"
+                  : "bg-white text-slate-500 border-slate-300 hover:bg-slate-50"
+              }`}
+            >
+              <span className="font-serif">Aa</span>
+            </button>
+
             {/* Zoom controls */}
             <div className="flex items-center gap-0.5 bg-slate-100 rounded-lg p-1">
               <button
@@ -797,7 +962,7 @@ export default function PdfMapper() {
 
             {/* PDF image inside zoom wrapper */}
             {!loadingStorage && !renderingPdf && !showUploadZone && (
-              <div style={{ width: `${Math.round(pdfContW * zoom / 100)}px`, position: "relative" }}>
+              <div style={{ width: `${renderW}px`, position: "relative" }}>
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   key={pageImages[currentPage]}
@@ -816,27 +981,29 @@ export default function PdfMapper() {
                     const { bg, border } = TYPE_STYLE[tk];
                     const isSel  = selectedId === m.field_id;
                     const isCb   = m.field_type === "checkbox";
+                    const isTxt  = isTextual(m.field_type);
 
-                    // Checkboxes always render as a fixed 12×12 pt square — never as wide
-                    // bars — regardless of what w/h is stored in the mapping.
+                    // Checkboxes always render as a fixed CHECKBOX_SIZE square — never
+                    // as wide bars — regardless of what w/h is stored in the mapping.
+                    // The exporter uses the same constant, so preview == print.
                     const dispW  = isCb
-                      ? `${(12 / PDF_W) * 100}%`
+                      ? `${(CHECKBOX_SIZE / PDF_W) * 100}%`
                       : `${Math.max((m.w / PDF_W) * 100, 0.5)}%`;
                     const dispH  = isCb
-                      ? `${(12 / PDF_H) * 100}%`
+                      ? `${(CHECKBOX_SIZE / PDF_H) * 100}%`
                       : `${Math.max((m.h / PDF_H) * 100, 0.4)}%`;
 
                     return (
                       <div key={m.field_id}
                         ref={el => { markerRefs.current[m.field_id] = el; }}
-                        title={`${m.field_id} — ${m.label}\nDrag to reposition`}
+                        title={`${m.field_id} — ${m.label}${isTxt ? `\nText size: ${effSize(m)}pt${m.font_size ? "" : " (default)"}` : ""}\nDrag to reposition`}
                         onMouseDown={e => handleMarkerMouseDown(e, m.field_id)}
                         onClick={e => {
                           e.stopPropagation();
                           setSelectedId(m.field_id);
                           fieldRefs.current[m.field_id]?.scrollIntoView({ behavior: "smooth", block: "nearest" });
                         }}
-                        className={`absolute border-2 flex items-center justify-center ${bg} ${border} ${isSel ? "ring-2 ring-yellow-400 ring-offset-1 z-10" : ""}`}
+                        className={`absolute border-2 flex ${isCb ? "items-center justify-center" : "items-end justify-start overflow-hidden"} ${bg} ${border} ${isSel ? "ring-2 ring-yellow-400 ring-offset-1 z-10" : ""}`}
                         style={{
                           left: `${(m.x / PDF_W) * 100}%`,
                           top:  `${(m.y / PDF_H) * 100}%`,
@@ -846,12 +1013,47 @@ export default function PdfMapper() {
                           cursor: "grab",
                         }}
                       >
-                        {/* Show a ✓ inside each checkbox marker so it's obviously a tick field */}
-                        {isCb && (
+                        {/* True-to-print tick: same geometry the exporter draws, with the
+                            vertex pinned to the centre of this square. Rendered from a
+                            zero-sized SVG at 50%/50% with overflow visible, so the arms
+                            can extend past the marker exactly as they do on the page. */}
+                        {isCb && pxPerPt > 0 && (
+                          <svg
+                            width={0} height={0}
+                            style={{
+                              position: "absolute", left: "50%", top: "50%",
+                              overflow: "visible", pointerEvents: "none",
+                            }}
+                          >
+                            <path
+                              d={
+                                `M ${-TICK_SIZE * TICK_LEFT_DX * pxPerPt} ${-TICK_SIZE * TICK_LEFT_DY * pxPerPt} ` +
+                                `L 0 0 ` +
+                                `L ${TICK_SIZE * TICK_RIGHT_DX * pxPerPt} ${-TICK_SIZE * TICK_RIGHT_DY * pxPerPt}`
+                              }
+                              fill="none"
+                              stroke="rgba(15,23,42,0.85)"
+                              strokeWidth={Math.max(TICK_WEIGHT * pxPerPt, 0.75)}
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                            />
+                          </svg>
+                        )}
+
+                        {/* Sample text at the field's real size — sits on the same
+                            baseline the exporter uses (1pt left / 2pt bottom padding),
+                            so what you see here is what prints. */}
+                        {isTxt && showTextPreview && pxPerPt > 0 && (
                           <span style={{
-                            fontSize: "7px", lineHeight: 1, fontWeight: 700,
-                            color: "inherit", pointerEvents: "none", userSelect: "none",
-                          }}>✓</span>
+                            fontSize:   `${effSize(m) * pxPerPt}px`,
+                            fontFamily: "Helvetica, Arial, sans-serif",
+                            lineHeight: 1,
+                            whiteSpace: "nowrap",
+                            color: "rgba(15,23,42,0.8)",
+                            paddingLeft:   `${1 * pxPerPt}px`,
+                            paddingBottom: `${2 * pxPerPt}px`,
+                            pointerEvents: "none", userSelect: "none",
+                          }}>{m.label}</span>
                         )}
                       </div>
                     );
@@ -890,6 +1092,86 @@ export default function PdfMapper() {
 
         {/* ── RIGHT: Field list — fixed compact width ────────────────────────── */}
         <div className="flex-shrink-0 space-y-2 overflow-y-auto" style={{ width: "340px", maxHeight: "calc(100vh - 215px)" }}>
+
+          {/* ── Text size controls ─────────────────────────────────────────── */}
+          <div className="sticky top-0 z-20 bg-white pb-2 space-y-2">
+
+            {/* Global default */}
+            <div className="border border-slate-200 rounded-lg px-3 py-2.5 bg-slate-50">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-semibold text-slate-700">Default text size</span>
+                <SizeStepper
+                  value={defaultFontSize}
+                  base={DEFAULT_TXT_SIZE}
+                  onChange={v => setDefaultFontSize(v ?? DEFAULT_TXT_SIZE)}
+                  title="Size used by fields with no size of their own"
+                />
+              </div>
+              <p className="text-[11px] text-slate-400 mt-1.5 leading-snug">
+                Applies to every text field that has no size of its own.
+              </p>
+            </div>
+
+            {/* Selected field */}
+            {selectedId && (
+              <div className="border border-yellow-300 bg-yellow-50/60 rounded-lg px-3 py-2.5 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-semibold text-slate-800 truncate">
+                    {selDef?.label ?? selectedId}
+                  </span>
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded flex-shrink-0 ${TYPE_STYLE[(selDef?.type ?? "text")].badge}`}>
+                    {selDef?.type ?? "text"}
+                  </span>
+                </div>
+
+                {!selMapping ? (
+                  <p className="text-[11px] text-slate-500 leading-snug">
+                    Click the PDF to place this field, then set its text size here.
+                  </p>
+                ) : !isTextual(selMapping.field_type) ? (
+                  <p className="text-[11px] text-slate-500 leading-snug">
+                    No text size — this field prints a {selMapping.field_type === "checkbox" ? "tick" : "image"}.
+                  </p>
+                ) : (
+                  <>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs text-slate-600">Text size</span>
+                      <SizeStepper
+                        value={selMapping.font_size ?? null}
+                        base={defaultFontSize}
+                        onChange={v => setFieldFontSize(selMapping.field_id, v)}
+                        title="Size for this field only"
+                      />
+                    </div>
+
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[11px] text-slate-400">
+                        {selMapping.font_size
+                          ? `Overrides the ${defaultFontSize}pt default`
+                          : `Using the ${defaultFontSize}pt default`}
+                      </span>
+                      {selMapping.font_size != null && (
+                        <button
+                          onClick={() => setFieldFontSize(selMapping.field_id, null)}
+                          className="text-[11px] text-blue-600 hover:text-blue-700 hover:underline flex-shrink-0"
+                        >
+                          Reset
+                        </button>
+                      )}
+                    </div>
+
+                    <button
+                      onClick={() => applySizeToPage(effSize(selMapping), currentPage)}
+                      className="w-full text-[11px] py-1.5 rounded-md border border-slate-300 bg-white text-slate-600 hover:bg-slate-50 transition-colors"
+                    >
+                      Apply {effSize(selMapping)}pt to all text fields on page {currentPage}
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+
           {SECTIONS.map(section => {
             const isOpen   = expanded[section.title] !== false;
             const secMapped = section.fields.filter(f => mappings[f.id]).length;
@@ -925,6 +1207,13 @@ export default function PdfMapper() {
                           <div className={`w-2 h-2 rounded-full flex-shrink-0 ${mapping ? dot : "bg-slate-200"}`} />
                           <span className={`flex-1 min-w-0 truncate text-xs ${isSel ? "font-medium text-slate-900" : "text-slate-600"}`}>{field.label}</span>
                           <span className={`text-xs px-1.5 py-0.5 rounded flex-shrink-0 ${badge}`}>{field.type}</span>
+                          {/* Flag fields that deviate from the default size */}
+                          {mapping?.font_size && isTextual(mapping.field_type) && (
+                            <span className="text-[10px] px-1 py-0.5 rounded flex-shrink-0 bg-amber-100 text-amber-700 font-medium tabular-nums"
+                              title={`Custom text size: ${mapping.font_size}pt`}>
+                              {mapping.font_size}pt
+                            </span>
+                          )}
                           {mapping && <span className="text-xs text-slate-400 flex-shrink-0 hidden md:block">{Math.round(mapping.x)},{Math.round(mapping.y)}</span>}
                           {mapping && (
                             <button onClick={e => { e.stopPropagation(); clearMapping(field.id); }}
