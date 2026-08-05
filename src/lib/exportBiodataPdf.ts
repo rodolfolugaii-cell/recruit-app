@@ -178,6 +178,24 @@ async function fetchPageImage(page: number): Promise<Uint8Array> {
   return bytes;
 }
 
+/**
+ * First given name only — the Name field on the biodata prints just the first
+ * name, never the surname.
+ *
+ *   "Maria Santos Cruz"  → "Maria"
+ *   "Cruz, Maria Santos" → "Maria"   (comma means surname was written first)
+ *
+ * Only the PDF's Name field is shortened; the dashboard, the biodata modal and
+ * the download filename all keep the full name.
+ */
+function firstNameOf(fullName: string | null | undefined): string {
+  const n = (fullName ?? "").trim();
+  if (!n) return "";
+  // "Surname, Given Names" — take what follows the comma
+  const afterComma = n.includes(",") ? (n.split(",")[1] ?? "").trim() : "";
+  return (afterComma || n).split(/\s+/)[0] ?? "";
+}
+
 // ── Build field-value dictionary from an applicant record ─────────────────────
 // Values: string → drawn as text; true → draws a filled checkbox square; false/undefined → skipped
 function buildValues(ap: ApplicantForExport): Record<string, string | boolean> {
@@ -205,7 +223,7 @@ function buildValues(ap: ApplicantForExport): Record<string, string | boolean> {
                              : "",
 
     // ── Personal details ──────────────────────────────────────────────────
-    full_name:             ap.full_name    ?? "",
+    full_name:             firstNameOf(ap.full_name),   // first name only on the form
     date_of_birth:         dob ? dob.toLocaleDateString("en-GB") : "",
     nationality:           ap.nationality  ?? "",
     religion:              fd.religion     ?? "",
@@ -456,7 +474,11 @@ export async function exportBiodataPdf(applicant: ApplicantForExport): Promise<v
     } else if (typeof value === "string" && value.trim() !== "") {
       // Per-field size (falls back to the global default set in PDF Mapper)
       const size = sizeFor(m);
-      const text = fitText(value, font, size, m.w - 2);
+      // The biodata form asks for CAPITAL letters, so every value is upper-cased.
+      // Done before fitText so the width measurement matches what actually
+      // prints — capitals are wider, and measuring the original would let text
+      // overflow its box.
+      const text = fitText(value.toUpperCase(), font, size, m.w - 2);
       page.drawText(text, {
         x:    m.x + 1,
         y:    libY + 2,   // 2pt padding from the bottom of the field zone
