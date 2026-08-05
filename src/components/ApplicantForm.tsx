@@ -3,6 +3,10 @@
 import { useState } from "react";
 import { supabase } from "@/lib/supabase";
 import SignaturePad from "@/components/SignaturePad";
+import {
+  SKILL_OPTIONS, COOKING_OPTIONS, HOUSEHOLD_CHORES,
+  EDUCATION_OPTIONS, CONTRACT_STATUS_OPTIONS, WE_CONTRACT_STATUS_OPTIONS,
+} from "@/lib/applicantOptions";
 
 /* ── Types ──────────────────────────────────────────────────────────────── */
 interface WorkExperienceEntry {
@@ -47,20 +51,8 @@ const STEPS = [
   "Review & Submit",
 ];
 
-const SKILL_OPTIONS = [
-  "Cooking", "Child Care", "New Born Care", "Special Child Care",
-  "Elderly Care", "Disabled Person Care", "Pet Care", "Driving",
-  "Car Washing", "Plant Care", "Kids Tutorial", "Nursing Aide",
-];
-const COOKING_OPTIONS = [
-  "Western Food", "Asian Food", "Mediterranean Food",
-  "Baking", "Can follow Recipe and Cook Book",
-];
-const HOUSEHOLD_CHORES = [
-  "Cooking", "Child Care", "New Born Care", "Special Child Care",
-  "Elderly Care", "Disabled Person Care", "Pet Care",
-  "Driving", "Car Washing", "Plant Care / Gardening",
-];
+// Option strings live in one place — see the note in applicantOptions.ts about
+// why drifting from them silently breaks the PDF checkboxes.
 
 const emptyWE = (): WorkExperienceEntry => ({
   yearsOfEmployment: "", dateFrom: "", dateTo: "", location: "", flatSize: "",
@@ -364,7 +356,7 @@ export default function ApplicantForm() {
               <label className={lbl}>Status</label>
               <select value={data.contractStatus} onChange={e => set("contractStatus", e.target.value)} className={inp}>
                 <option value="">Please select...</option>
-                {["First-Timer (No HK Experience)","Finished Contract","Plan to Break","Terminated","Break of Contract"].map(v => <option key={v}>{v}</option>)}
+                {CONTRACT_STATUS_OPTIONS.map(v => <option key={v}>{v}</option>)}
               </select>
             </div>
             {data.contractStatus && data.contractStatus !== "First-Timer (No HK Experience)" && (
@@ -386,7 +378,7 @@ export default function ApplicantForm() {
               <label className={lbl}>Education Level</label>
               <select value={data.education} onChange={e => set("education", e.target.value)} className={inp}>
                 <option value="">Please select...</option>
-                {["High School Graduate","College Undergraduate","College Graduate","Vocational Course"].map(v => <option key={v}>{v}</option>)}
+                {EDUCATION_OPTIONS.map(v => <option key={v}>{v}</option>)}
               </select>
             </div>
             {["College Undergraduate","College Graduate","Vocational Course"].includes(data.education) && (
@@ -533,7 +525,7 @@ export default function ApplicantForm() {
                     <label className={lbl}>Contract Status</label>
                     <select value={we.contractStatus} onChange={e => setWE(i, "contractStatus", e.target.value)} className={inp}>
                       <option value="">Please select...</option>
-                      {["Finished Contract","Plan to Break","Terminated","Break"].map(v => <option key={v}>{v}</option>)}
+                      {WE_CONTRACT_STATUS_OPTIONS.map(v => <option key={v}>{v}</option>)}
                     </select>
                   </div>
                 </div>

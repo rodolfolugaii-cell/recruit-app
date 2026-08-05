@@ -371,6 +371,12 @@ export default function PdfMapper() {
     Object.fromEntries(SECTIONS.map(s => [s.title, true]))
   );
 
+  // ── Field-list filtering ─────────────────────────────────────────────────────
+  // 150+ fields across the two pages, so the list needs narrowing down
+  const [query, setQuery]                   = useState("");
+  const [unmappedOnly, setUnmappedOnly]     = useState(false);
+  const [currentPageOnly, setCurrentPageOnly] = useState(false);
+
   // ── Text size ────────────────────────────────────────────────────────────────
   // Global default, applied to every text/date field without its own size
   const [defaultFontSize, setDefaultFontSize] = useState(DEFAULT_TXT_SIZE);
@@ -822,6 +828,33 @@ export default function PdfMapper() {
   const renderW = Math.round(pdfContW * zoom / 100);
   const pxPerPt = renderW / PDF_W;
 
+  /* ── Filtered field list ────────────────────────────────────────────────────
+     Sections are rebuilt with only their matching fields, then empty ones are
+     dropped, so the list collapses down to just what was asked for. ── */
+  const q = query.trim().toLowerCase();
+  const filtering = !!q || unmappedOnly || currentPageOnly;
+
+  const visibleSections = SECTIONS
+    .filter(s => !currentPageOnly || s.page === currentPage)
+    .map(s => ({
+      ...s,
+      fields: s.fields.filter(f =>
+        (!q || f.label.toLowerCase().includes(q) || f.id.toLowerCase().includes(q)) &&
+        (!unmappedOnly || !mappings[f.id])
+      ),
+    }))
+    .filter(s => s.fields.length > 0);
+
+  const matchCount = visibleSections.reduce((n, s) => n + s.fields.length, 0);
+
+  const clearFilters = () => { setQuery(""); setUnmappedOnly(false); setCurrentPageOnly(false); };
+
+  const chipClass = (on: boolean) =>
+    `px-2 py-1 rounded-md text-[11px] font-medium border transition-colors ${
+      on ? "bg-slate-800 text-white border-slate-800"
+         : "bg-white text-slate-500 border-slate-300 hover:bg-slate-50"
+    }`;
+
   // ── Render ────────────────────────────────────────────────────────────────────
   return (
     <div className="flex flex-col gap-4">
@@ -1093,23 +1126,73 @@ export default function PdfMapper() {
         {/* ── RIGHT: Field list — fixed compact width ────────────────────────── */}
         <div className="flex-shrink-0 space-y-2 overflow-y-auto" style={{ width: "340px", maxHeight: "calc(100vh - 215px)" }}>
 
-          {/* ── Text size controls ─────────────────────────────────────────── */}
+          {/* ── Search + text size controls ────────────────────────────────── */}
           <div className="sticky top-0 z-20 bg-white pb-2 space-y-2">
 
+            {/* Search */}
+            <div className="relative">
+              <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 text-sm pointer-events-none">🔍</span>
+              <input
+                type="text"
+                value={query}
+                onChange={e => setQuery(e.target.value)}
+                onKeyDown={e => { if (e.key === "Escape") setQuery(""); }}
+                placeholder="Search fields…"
+                className="w-full pl-8 pr-8 py-2 text-sm rounded-lg border border-slate-300 text-slate-700 placeholder-slate-400 focus:border-blue-400 focus:outline-none focus:ring-1 focus:ring-blue-200"
+              />
+              {query && (
+                <button
+                  onClick={() => setQuery("")}
+                  title="Clear search (Esc)"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-300 hover:text-slate-500 text-lg leading-none transition-colors"
+                >×</button>
+              )}
+            </div>
+
+            {/* Quick filters */}
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <button
+                onClick={() => setUnmappedOnly(v => !v)}
+                className={chipClass(unmappedOnly)}
+                title="Show only fields that still need placing"
+              >
+                Unmapped
+              </button>
+              <button
+                onClick={() => setCurrentPageOnly(v => !v)}
+                className={chipClass(currentPageOnly)}
+                title="Hide fields belonging to the other page"
+              >
+                Page {currentPage}
+              </button>
+
+              <div className="flex-1" />
+
+              {filtering && (
+                <>
+                  <span className="text-[11px] text-slate-400 tabular-nums">{matchCount} shown</span>
+                  <button
+                    onClick={clearFilters}
+                    className="text-[11px] text-blue-600 hover:text-blue-700 hover:underline"
+                  >
+                    Reset
+                  </button>
+                </>
+              )}
+            </div>
+
             {/* Global default */}
-            <div className="border border-slate-200 rounded-lg px-3 py-2.5 bg-slate-50">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-xs font-semibold text-slate-700">Default text size</span>
-                <SizeStepper
-                  value={defaultFontSize}
-                  base={DEFAULT_TXT_SIZE}
-                  onChange={v => setDefaultFontSize(v ?? DEFAULT_TXT_SIZE)}
-                  title="Size used by fields with no size of their own"
-                />
-              </div>
-              <p className="text-[11px] text-slate-400 mt-1.5 leading-snug">
-                Applies to every text field that has no size of its own.
-              </p>
+            <div
+              className="border border-slate-200 rounded-lg px-3 py-2 bg-slate-50 flex items-center justify-between gap-2"
+              title="Size used by every text field that has no size of its own"
+            >
+              <span className="text-xs font-semibold text-slate-700">Default text size</span>
+              <SizeStepper
+                value={defaultFontSize}
+                base={DEFAULT_TXT_SIZE}
+                onChange={v => setDefaultFontSize(v ?? DEFAULT_TXT_SIZE)}
+                title="Size used by fields with no size of their own"
+              />
             </div>
 
             {/* Selected field */}
@@ -1172,8 +1255,20 @@ export default function PdfMapper() {
             )}
           </div>
 
-          {SECTIONS.map(section => {
-            const isOpen   = expanded[section.title] !== false;
+          {/* No results */}
+          {filtering && matchCount === 0 && (
+            <div className="text-center py-10 px-4 border border-dashed border-slate-200 rounded-lg">
+              <p className="text-sm text-slate-500">No fields match.</p>
+              <button onClick={clearFilters} className="text-xs text-blue-600 hover:underline mt-1">
+                Reset filters
+              </button>
+            </div>
+          )}
+
+          {visibleSections.map(section => {
+            // While filtering, force sections open — a collapsed one would hide
+            // the very match the search just surfaced.
+            const isOpen   = filtering || expanded[section.title] !== false;
             const secMapped = section.fields.filter(f => mappings[f.id]).length;
             const isActive = section.page === currentPage;
             return (

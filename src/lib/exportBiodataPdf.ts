@@ -192,8 +192,10 @@ function buildValues(ap: ApplicantForExport): Record<string, string | boolean> {
     application_no:        ap.id.substring(0, 8).toUpperCase(),
 
     // ── Contract status (checkboxes) ──────────────────────────────────────
-    is_firstimer:          fd.contractStatus === "Firstimer" ||
-                           fd.contractStatus === "First Timer",
+    // The apply form stores "First-Timer (No HK Experience)"; older rows used
+    // "Firstimer" / "First Timer". Matching on the prefix covers all three —
+    // the previous exact-equality check never ticked this box at all.
+    is_firstimer:          /^first[-\s]?timer/i.test(fd.contractStatus ?? ""),
     contract_finished:     fd.contractStatus === "Finished Contract",
     contract_plan_break:   fd.contractStatus === "Plan to Break",
     contract_terminated:   fd.contractStatus === "Terminated" ||

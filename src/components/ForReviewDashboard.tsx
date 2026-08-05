@@ -8,6 +8,7 @@ import {
   TrashDropZone, DeleteConfirmDialog, UndoToast,
   isPointOverTrash, DELETED_STATUS,
 } from "@/components/TrashZone";
+import ApplicantEditForm, { type EditableApplicant } from "@/components/ApplicantEditForm";
 
 interface WorkExperienceEntry {
   yearsOfEmployment: string; dateFrom: string; dateTo: string;
@@ -208,6 +209,9 @@ export default function ForReviewDashboard() {
   const [dragState, setDragState]        = useState<DragState | null>(null);
   const [sortedIds, setSortedIds]        = useState<string[]>([]);
 
+  /* ── Inline biodata editing ── */
+  const [editing, setEditing] = useState(false);
+
   /* ── Trash ── */
   const [confirmDelete, setConfirmDelete] = useState<Applicant | null>(null);
   const [deleting, setDeleting]           = useState(false);
@@ -326,6 +330,17 @@ export default function ForReviewDashboard() {
   }, [pendingUndo]);
 
   const dismissUndo = useCallback(() => setPendingUndo(null), []);
+
+  /* ── Corrections saved from the edit form ─────────────────────────────────
+     Merge back into the list and the open modal so the card, the biodata view
+     and any subsequent PDF export all show the corrected data immediately. ── */
+  const handleApplicantSaved = useCallback((updated: EditableApplicant) => {
+    setApplicants((p) =>
+      p.map((a) => (a.id === updated.id ? { ...a, ...(updated as unknown as Partial<Applicant>) } : a))
+    );
+    setSelected((p) => (p?.id === updated.id ? { ...p, ...(updated as unknown as Partial<Applicant>) } : p));
+    setEditing(false);
+  }, []);
 
   /* ── Export filled biodata PDF ── */
   const handleExportPdf = useCallback(async () => {
@@ -675,17 +690,31 @@ export default function ForReviewDashboard() {
       {selectedApplicant && (
         <div
           className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm"
-          onClick={() => setSelected(null)}
+          // While editing, a stray backdrop click must not silently bin the edits
+          onClick={() => { if (!editing) setSelected(null); }}
         >
           <div
             className="bg-white rounded-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto shadow-xl border border-gray-200 flex flex-col"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="p-3 border-b border-gray-200 flex justify-between items-center bg-white">
-              <h2 className="text-xs font-bold text-gray-600 uppercase tracking-widest">Applicant Biodata</h2>
-              <button onClick={() => setSelected(null)} className="text-gray-400 hover:text-gray-600 text-2xl font-semibold leading-none p-2">&times;</button>
+              <h2 className="text-xs font-bold text-gray-600 uppercase tracking-widest">
+                {editing ? "Editing Biodata" : "Applicant Biodata"}
+              </h2>
+              <button
+                onClick={() => { if (!editing || confirm("Discard unsaved changes?")) { setEditing(false); setSelected(null); } }}
+                className="text-gray-400 hover:text-gray-600 text-2xl font-semibold leading-none p-2"
+              >&times;</button>
             </div>
 
+            {/* ── Edit mode replaces the read-only biodata view ── */}
+            {editing ? (
+              <ApplicantEditForm
+                applicant={selectedApplicant as unknown as EditableApplicant}
+                onCancel={() => setEditing(false)}
+                onSaved={handleApplicantSaved}
+              />
+            ) : (
             <div className="p-5 bg-white text-gray-900 leading-tight" style={{ fontSize: "13px" }}>
               {(() => {
                 const fd = selectedApplicant.form_data;
@@ -942,7 +971,10 @@ export default function ForReviewDashboard() {
                 );
               })()}
             </div>
+            )}
 
+            {/* Footer is hidden in edit mode — the edit form brings its own */}
+            {!editing && (
             <div className="p-6 border-t border-gray-100 bg-amber-50 flex justify-between items-center gap-3">
               <button
                 onClick={() => { setSelected(null); handleMoveBack(selectedApplicant.id); }}
@@ -952,6 +984,12 @@ export default function ForReviewDashboard() {
                 {movingBackId === selectedApplicant.id ? "Moving…" : "Move Back to Candidates"}
               </button>
               <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setEditing(true)}
+                  className="bg-white text-slate-700 border border-slate-300 px-5 py-2.5 rounded-lg text-sm font-medium hover:bg-slate-50 transition-colors"
+                >
+                  ✏️ Edit
+                </button>
                 <button
                   onClick={handleExportPdf}
                   disabled={exporting}
@@ -974,6 +1012,7 @@ export default function ForReviewDashboard() {
                 </button>
               </div>
             </div>
+            )}
           </div>
         </div>
       )}
