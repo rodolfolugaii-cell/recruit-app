@@ -2,9 +2,17 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 
-export default function LoginForm() {
+/**
+ * The recruiter sign-in card.
+ *
+ * Renders the card ONLY — no page background — so it can sit both on the
+ * standalone /login page and inside the landing page's floating panel
+ * without the auth logic being written twice.
+ */
+export default function LoginForm({ className = "" }: { className?: string }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -20,8 +28,8 @@ export default function LoginForm() {
       const { error } = await supabase.auth.signInWithPassword({ email, password });
       if (error) throw error;
       router.push("/dashboard");
-    } catch (error: any) {
-      setErrorMsg(error.message || "Invalid login credentials");
+    } catch (error) {
+      setErrorMsg(error instanceof Error ? error.message : "Invalid login credentials");
     } finally {
       setLoading(false);
     }
@@ -29,69 +37,70 @@ export default function LoginForm() {
 
   return (
     <div
-      className="min-h-screen flex flex-col items-center justify-center p-4 relative"
-      style={{
-        backgroundImage: "url('/hk-bg.png')",
-        backgroundSize: "cover",
-        backgroundPosition: "center",
-        backgroundAttachment: "fixed",
-      }}
+      className={`w-full bg-white/10 backdrop-blur-xl border border-white/20 rounded-2xl shadow-2xl p-7 space-y-5 ${className}`}
     >
-      {/* Dark overlay */}
-      <div className="absolute inset-0 bg-black/55" />
+      <div className="space-y-1">
+        <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-amber-400 to-red-600 flex items-center justify-center text-white font-bold text-[15px] tracking-tight shadow-lg mb-3">
+          CDR
+        </div>
+        <h2 className="text-xl font-bold text-white tracking-tight">Recruiter Portal</h2>
+        <p className="text-[13px] text-white/55">Sign in to access candidate profiles</p>
+      </div>
 
-      {/* Login Card */}
-      <div className="relative z-10 max-w-md w-full bg-white/10 backdrop-blur-md border border-white/20 rounded-2xl shadow-2xl p-8 space-y-6">
+      {errorMsg && (
+        <div className="bg-red-500/20 text-red-100 p-3 rounded-lg text-[13px] font-medium border border-red-400/30">
+          {errorMsg}
+        </div>
+      )}
 
-        <div className="text-center space-y-1">
-          <div className="w-12 h-12 bg-blue-600 rounded-full flex items-center justify-center text-white font-bold text-lg mx-auto mb-3">
-            HT
-          </div>
-          <h1 className="text-2xl font-bold text-white">Recruiter Portal</h1>
-          <p className="text-sm text-white/60">Sign in to access candidate profiles</p>
+      <form onSubmit={handleLogin} className="space-y-4">
+        <div>
+          <label htmlFor="lf-email" className="block text-[13px] font-medium text-white/80 mb-1.5">
+            Email Address
+          </label>
+          <input
+            id="lf-email"
+            type="email"
+            required
+            autoComplete="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            className="block w-full rounded-lg border border-white/20 bg-white/10 text-white placeholder-white/35 p-2.5 text-sm transition-colors focus:border-amber-400/70 focus:outline-none focus:bg-white/15"
+            placeholder="you@company.com"
+          />
         </div>
 
-        {errorMsg && (
-          <div className="bg-red-500/20 text-red-200 p-3 rounded-lg text-sm font-medium border border-red-400/30">
-            {errorMsg}
-          </div>
-        )}
+        <div>
+          <label htmlFor="lf-password" className="block text-[13px] font-medium text-white/80 mb-1.5">
+            Password
+          </label>
+          <input
+            id="lf-password"
+            type="password"
+            required
+            autoComplete="current-password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            className="block w-full rounded-lg border border-white/20 bg-white/10 text-white placeholder-white/35 p-2.5 text-sm transition-colors focus:border-amber-400/70 focus:outline-none focus:bg-white/15"
+            placeholder="••••••••"
+          />
+        </div>
 
-        <form onSubmit={handleLogin} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-white/80 mb-1">Email Address</label>
-            <input
-              type="email"
-              required
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="block w-full rounded-lg border border-white/20 bg-white/10 text-white placeholder-white/40 p-2.5 text-sm focus:border-blue-400 focus:outline-none focus:bg-white/15"
-              placeholder="you@company.com"
-            />
-          </div>
+        <button
+          type="submit"
+          disabled={loading}
+          className="w-full bg-gradient-to-r from-amber-500 to-red-600 text-white py-3 rounded-lg font-semibold text-sm shadow-lg shadow-red-900/30 transition-all hover:brightness-110 hover:shadow-red-900/50 focus:outline-none focus:ring-2 focus:ring-amber-300/50 disabled:opacity-60 disabled:cursor-not-allowed"
+        >
+          {loading ? "Signing in…" : "Sign In"}
+        </button>
+      </form>
 
-          <div>
-            <label className="block text-sm font-medium text-white/80 mb-1">Password</label>
-            <input
-              type="password"
-              required
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="block w-full rounded-lg border border-white/20 bg-white/10 text-white placeholder-white/40 p-2.5 text-sm focus:border-blue-400 focus:outline-none focus:bg-white/15"
-              placeholder="••••••••"
-            />
-          </div>
-
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full bg-blue-600 text-white py-3 rounded-lg font-medium text-sm hover:bg-blue-500 transition-colors focus:outline-none disabled:bg-gray-500 mt-2"
-          >
-            {loading ? "Signing in..." : "Sign In"}
-          </button>
-        </form>
-
-      </div>
+      <p className="text-[12px] text-white/45 text-center pt-1 border-t border-white/10">
+        Looking for work?{" "}
+        <Link href="/apply" className="text-amber-300 hover:text-amber-200 font-medium underline underline-offset-2">
+          Apply as a helper
+        </Link>
+      </p>
     </div>
   );
 }

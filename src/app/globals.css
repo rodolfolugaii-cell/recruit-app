@@ -92,3 +92,90 @@ body {
   100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.5); }
   50%  { box-shadow: 0 0 0 5px rgba(59, 130, 246, 0); }
 }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Landing page — scroll-driven stage
+   The scroll handler writes --op / --ty custom properties instead of setting
+   opacity and transform directly, so the media query below can hand the
+   layout back to normal document flow on small screens without JavaScript
+   having to know the viewport size (which would flash on hydration).
+   ───────────────────────────────────────────────────────────────────────── */
+
+.ls-panel {
+  position: absolute;
+  inset: 0;
+  opacity: var(--op, 1);
+  transform: translate3d(0, var(--ty, 0px), 0);
+  will-change: opacity, transform;
+}
+
+.ls-bg {
+  position: absolute;
+  inset: 0;
+  opacity: var(--op, 1);
+  will-change: opacity;
+}
+
+/* Below lg the three panels stack and scroll normally — no cross-fade. */
+@media (max-width: 1023px) {
+  .ls-panel {
+    position: relative;
+    inset: auto;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+}
+
+/* Slow drift for the background colour blooms */
+@keyframes ls-drift {
+  0%,
+  100% { transform: translate3d(0, 0, 0) scale(1); }
+  33%  { transform: translate3d(4%, -6%, 0) scale(1.12); }
+  66%  { transform: translate3d(-5%, 4%, 0) scale(0.94); }
+}
+
+.ls-orb {
+  animation: ls-drift 22s ease-in-out infinite;
+}
+
+/* Gentle bob for the floating sign-in panel */
+@keyframes ls-float {
+  0%,
+  100% { transform: translate3d(0, 0, 0); }
+  50%  { transform: translate3d(0, -10px, 0); }
+}
+
+.ls-float {
+  animation: ls-float 7s ease-in-out infinite;
+}
+
+@keyframes ls-fade-up {
+  from { opacity: 0; transform: translate3d(0, 18px, 0); }
+  to   { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+
+.ls-enter {
+  animation: ls-fade-up 0.7s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes ls-scroll-hint {
+  0%   { transform: translateY(0);   opacity: 0; }
+  35%  { opacity: 1; }
+  100% { transform: translateY(9px); opacity: 0; }
+}
+
+.ls-hint-dot {
+  animation: ls-scroll-hint 1.8s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ls-orb,
+  .ls-float,
+  .ls-enter,
+  .ls-hint-dot {
+    animation: none !important;
+  }
+  .ls-panel {
+    transform: none !important;
+  }
+}

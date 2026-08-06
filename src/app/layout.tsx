@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Hometalent",
-  description: "Employment and Recruitment Portal",
+  title: "Castillo Del Rey Consultancy",
+  description: "Hong Kong domestic helper placement — vetted, documented, ready to interview.",
 };
 
 export default function RootLayout({
