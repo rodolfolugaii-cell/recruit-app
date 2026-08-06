@@ -9,6 +9,7 @@ import {
   isPointOverTrash, DELETED_STATUS,
 } from "@/components/TrashZone";
 import ApplicantEditForm, { type EditableApplicant } from "@/components/ApplicantEditForm";
+import ZodiacPanel from "@/components/ZodiacPanel";
 
 interface WorkExperienceEntry {
   yearsOfEmployment: string; dateFrom: string; dateTo: string;
@@ -694,7 +695,7 @@ export default function ForReviewDashboard() {
           onClick={() => { if (!editing) setSelected(null); }}
         >
           <div
-            className="bg-white rounded-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto shadow-xl border border-gray-200 flex flex-col"
+            className="bg-white rounded-xl max-w-6xl w-full max-h-[90vh] overflow-y-auto shadow-xl border border-gray-200 flex flex-col"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="p-3 border-b border-gray-200 flex justify-between items-center bg-white">
@@ -715,7 +716,10 @@ export default function ForReviewDashboard() {
                 onSaved={handleApplicantSaved}
               />
             ) : (
-            <div className="p-5 bg-white text-gray-900 leading-tight" style={{ fontSize: "13px" }}>
+            /* Biodata on the left, zodiac / fortune panel on the right.
+               Stacks vertically below lg so the modal still works on a tablet. */
+            <div className="flex flex-col lg:flex-row">
+            <div className="flex-1 min-w-0 p-5 bg-white text-gray-900 leading-tight" style={{ fontSize: "13px" }}>
               {(() => {
                 const fd = selectedApplicant.form_data;
                 const ap = selectedApplicant;
@@ -970,6 +974,14 @@ export default function ForReviewDashboard() {
                   </>
                 );
               })()}
+            </div>
+
+            {/* ── Zodiac / fortune sidebar ──
+                Sticky with its own scroll so it stays beside the biodata
+                however far down the form the recruiter reads. ── */}
+            <aside className="w-full lg:w-[320px] flex-shrink-0 border-t lg:border-t-0 lg:border-l border-gray-200 bg-slate-50/60 lg:sticky lg:top-0 lg:self-start lg:max-h-[calc(90vh-120px)] lg:overflow-y-auto">
+              <ZodiacPanel dob={selectedApplicant.date_of_birth} name={selectedApplicant.full_name} />
+            </aside>
             </div>
             )}
 
