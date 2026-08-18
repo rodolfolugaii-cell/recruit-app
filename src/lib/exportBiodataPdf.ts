@@ -33,6 +33,29 @@ export const TICK_LEFT_DY  = 0.50;
 export const TICK_RIGHT_DX = 0.65;
 export const TICK_RIGHT_DY = 0.80;
 
+// ── Paragraph fields ──────────────────────────────────────────────────────────
+// Some answers are free text that outgrows the blank it starts on. The form
+// gives them a run of ruled lines, and the mapper declares one field per line —
+// "Duties (line 1)" is the short blank beside the label, "(line 2)" the full
+// width one under it.
+//
+// buildValues() puts the whole answer on the FIRST id of a group; the rest are
+// continuation lines. flowParagraph() then re-splits it across whichever of
+// those boxes the recruiter actually placed, so the text wraps onto the blank
+// below instead of being cut off with an ellipsis on line 1.
+//
+// To give a field more room, add its next line id here and place that box in
+// PDF Mapper — nothing else needs to change.
+// How small a paragraph may go to avoid losing words. 5pt is about the floor for
+// something a person still has to read off a printed form.
+const PARAGRAPH_MIN_SIZE = 5;
+const PARAGRAPH_SIZE_STEP = 0.5;
+
+const PARAGRAPH_GROUPS: string[][] = [
+  ["country_a_duties_1", "country_a_duties_2"],
+  ["country_b_duties_1", "country_b_duties_2"],
+];
+
 // Row in pdf_field_mappings that stores global settings (not a real field).
 // Its font_size is the default applied to any field without its own size.
 const SETTINGS_ROW_ID = "__settings__";
@@ -167,6 +190,103 @@ function fitText(text: string, font: PDFFont, size: number, maxW: number): strin
     t = t.slice(0, -1);
   }
   return `${t}…`;
+}
+
+/**
+ * Greedy word-wrap of `text` across a run of boxes, one line each.
+ *
+ * Boxes are filled in order and may differ in width and font size — line 1 of a
+ * duties field is short because the printed label eats into it, line 2 spans the
+ * page. Only the LAST box ellipsises: everything still unplaced has nowhere left
+ * to go. Returns one string per box, "" for any that end up unused.
+ */
+function wrapAcross(
+  text: string,
+  font: PDFFont,
+  boxes: { size: number; maxW: number }[],
+): { lines: string[]; overflow: boolean } {
+  const words = text.split(/\s+/).filter(Boolean);
+  const out: string[] = [];
+  let overflow = false;
+  let w = 0;
+
+  boxes.forEach((box, i) => {
+    if (w >= words.length) { out.push(""); return; }
+
+    // Last box takes whatever is left, ellipsised if it overflows
+    if (i === boxes.length - 1) {
+      const rest   = words.slice(w).join(" ");
+      const fitted = fitText(rest, font, box.size, box.maxW);
+      if (fitted !== rest) overflow = true;
+      out.push(fitted);
+      w = words.length;
+      return;
+    }
+
+    let line = "";
+    while (w < words.length) {
+      const next = line ? `${line} ${words[w]}` : words[w];
+      if (font.widthOfTextAtSize(next, box.size) > box.maxW) {
+        // A single word wider than an empty box would spin here forever. Take
+        // it (trimmed to fit) rather than dropping it, and start the next line.
+        if (!line) { line = fitText(words[w], font, box.size, box.maxW); w++; overflow = true; }
+        break;
+      }
+      line = next;
+      w++;
+    }
+    out.push(line);
+  });
+
+  return { lines: out, overflow };
+}
+
+/**
+ * Spread every paragraph group's answer across the line boxes that were mapped,
+ * shrinking the type only as far as it takes to get all of it onto the page.
+ *
+ * Two ruled lines at 8pt hold roughly seventy characters, and a real job-duties
+ * answer runs longer than that, so flowing onto line 2 alone still ends in an
+ * ellipsis. Losing the tail of what someone wrote is worse than a smaller point
+ * size, so the paragraph steps down to PARAGRAPH_MIN_SIZE before it truncates.
+ *
+ * The whole group shares one size — a paragraph whose second line is visibly
+ * smaller than its first reads as a mistake. Any size chosen here is recorded in
+ * `sizeOverrides` for the drawing loop; fields that fit at their configured size
+ * are left out of it entirely.
+ */
+function flowParagraphs(
+  values: Record<string, string | boolean>,
+  mappings: FieldMapping[],
+  font: PDFFont,
+  sizeOverrides: Map<string, number>,
+): void {
+  for (const ids of PARAGRAPH_GROUPS) {
+    const text = values[ids[0]];
+    if (typeof text !== "string" || text.trim() === "") continue;
+
+    const placed = ids
+      .map(id => ({ id, m: mappings.find(f => f.field_id === id) }))
+      .filter((e): e is { id: string; m: FieldMapping } => !!e.m);
+    if (!placed.length) continue;
+
+    // Uppercased here because the drawing loop uppercases too — measuring the
+    // original would under-read the width and let capitals overflow.
+    const upper = text.toUpperCase();
+    const start = Math.min(...placed.map(({ m }) => sizeFor(m)));
+
+    let size   = start;
+    let result = wrapAcross(upper, font, placed.map(({ m }) => ({ size, maxW: m.w - 2 })));
+    while (result.overflow && size > PARAGRAPH_MIN_SIZE) {
+      size   = Math.max(PARAGRAPH_MIN_SIZE, size - PARAGRAPH_SIZE_STEP);
+      result = wrapAcross(upper, font, placed.map(({ m }) => ({ size, maxW: m.w - 2 })));
+    }
+
+    placed.forEach(({ id }, i) => {
+      values[id] = result.lines[i] ?? "";
+      if (size !== start) sizeOverrides.set(id, size);
+    });
+  }
 }
 
 async function fetchPageImage(page: number): Promise<Uint8Array> {
@@ -390,8 +510,11 @@ export async function exportBiodataPdf(applicant: ApplicantForExport): Promise<v
   page2.drawImage(img2, { x: 0, y: 0, width: PDF_W, height: PDF_H });
   const pages = [page1, page2];
 
-  // 4. Build the field-value map
+  // 4. Build the field-value map, then spread the long free-text answers over
+  //    the ruled lines the form gives them
   const values = buildValues(applicant);
+  const sizeOverrides = new Map<string, number>();
+  flowParagraphs(values, mappings, font, sizeOverrides);
 
   // 5. Embed applicant photo if available
   const photoMap = mappings.find(m => m.field_id === "photo");
@@ -480,8 +603,9 @@ export async function exportBiodataPdf(applicant: ApplicantForExport): Promise<v
         lineCap:   LineCapStyle.Round,
       });
     } else if (typeof value === "string" && value.trim() !== "") {
-      // Per-field size (falls back to the global default set in PDF Mapper)
-      const size = sizeFor(m);
+      // Per-field size (falls back to the global default set in PDF Mapper),
+      // unless a paragraph had to shrink to fit all its words on the form
+      const size = sizeOverrides.get(m.field_id) ?? sizeFor(m);
       // The biodata form asks for CAPITAL letters, so every value is upper-cased.
       // Done before fitText so the width measurement matches what actually
       // prints — capitals are wider, and measuring the original would let text
