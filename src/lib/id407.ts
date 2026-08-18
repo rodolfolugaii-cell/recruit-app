@@ -31,9 +31,15 @@ import { DUTY_FIELDS } from "./contracts";
 import type { FieldDef, FormSection } from "./pdfForms";
 import { formDate } from "./formDates";
 
-/** A3 landscape — one folded booklet sheet, two A4 form pages side by side. */
-export const ID407_PAGE_W = 1190.55;
-export const ID407_PAGE_H = 841.89;
+/**
+ * One folded booklet sheet, measured from the supplied scan rather than assumed.
+ *
+ * Close to A3 landscape but not equal to it — 1225 x 841 against A3's
+ * 1190.55 x 841.89. Using A3 would squeeze the template about 3% horizontally,
+ * so every box would drift further out the further right it sat.
+ */
+export const ID407_PAGE_W = 1225;
+export const ID407_PAGE_H = 841;
 
 /** Text that flows over a run of ruled lines. See flowParagraphs(). */
 export const ID407_PARAGRAPHS: string[][] = [
@@ -52,28 +58,6 @@ const areaUnitFields = (prefix: string, label: string): FieldDef[] => [
 ];
 
 export const ID407_SECTIONS: FormSection[] = [
-  {
-    title: "Contract (form page 1)", page: 1,
-    fields: [
-      { id: "id407_contract_no",       label: "D. H. Contract No.",          type: "text", defaultW: 110 },
-      { id: "id407_employer_name",     label: "Employer's name",             type: "text", defaultW: 210 },
-      { id: "id407_helper_name",       label: "Helper's name",               type: "text", defaultW: 200 },
-      { id: "id407_contract_date",     label: "Date contract is made",       type: "date", defaultW: 120 },
-      { id: "id407_origin_1",          label: "Cl.1 Place of origin (line 1)", type: "text", defaultW: 150 },
-      { id: "id407_origin_2",          label: "Cl.1 Place of origin (line 2)", type: "text", defaultW: 260 },
-      { id: "id407_origin_3",          label: "Cl.1 Place of origin (line 3)", type: "text", defaultW: 260 },
-      { id: "id407_clause_2a",         label: "Cl.2A — mark if used",        type: "checkbox" },
-      { id: "id407_clause_2b",         label: "Cl.2B — mark if used",        type: "checkbox" },
-      { id: "id407_clause_2c",         label: "Cl.2C — mark if used",        type: "checkbox" },
-      { id: "id407_clause_2b_date",    label: "Cl.2B commencing on",         type: "date", defaultW: 120 },
-      { id: "id407_clause_2b_prev_no", label: "Cl.2B previous contract no.", type: "text", defaultW: 90  },
-      { id: "id407_residence_1",       label: "Cl.3 Residence (line 1)",     type: "text", defaultW: 170 },
-      { id: "id407_residence_2",       label: "Cl.3 Residence (line 2)",     type: "text", defaultW: 280 },
-      { id: "id407_wages",             label: "Cl.5(a) Monthly wages",       type: "text", defaultW: 90  },
-      { id: "id407_food_allowance",    label: "Cl.5(b) Food allowance",      type: "text", defaultW: 60  },
-      { id: "id407_other_fees",        label: "Cl.8(vi) Other fees",         type: "text", defaultW: 230 },
-    ],
-  },
   {
     title: "Duties & signing (form page 4)", page: 1,
     fields: [
@@ -94,6 +78,28 @@ export const ID407_SECTIONS: FormSection[] = [
       { id: "id407_p4_helper_name",     label: "P4 Helper's name",           type: "text",      defaultW: 130 },
       { id: "id407_p4_helper_sig",      label: "P4 Helper's signature",      type: "signature", defaultW: 130, defaultH: 34 },
       { id: "id407_p4_helper_date",     label: "P4 Helper's date",           type: "date",      defaultW: 70  },
+    ],
+  },
+  {
+    title: "Contract (form page 1)", page: 1,
+    fields: [
+      { id: "id407_contract_no",       label: "D. H. Contract No.",          type: "text", defaultW: 110 },
+      { id: "id407_employer_name",     label: "Employer's name",             type: "text", defaultW: 210 },
+      { id: "id407_helper_name",       label: "Helper's name",               type: "text", defaultW: 200 },
+      { id: "id407_contract_date",     label: "Date contract is made",       type: "date", defaultW: 120 },
+      { id: "id407_origin_1",          label: "Cl.1 Place of origin (line 1)", type: "text", defaultW: 150 },
+      { id: "id407_origin_2",          label: "Cl.1 Place of origin (line 2)", type: "text", defaultW: 260 },
+      { id: "id407_origin_3",          label: "Cl.1 Place of origin (line 3)", type: "text", defaultW: 260 },
+      { id: "id407_clause_2a",         label: "Cl.2A — mark if used",        type: "checkbox" },
+      { id: "id407_clause_2b",         label: "Cl.2B — mark if used",        type: "checkbox" },
+      { id: "id407_clause_2c",         label: "Cl.2C — mark if used",        type: "checkbox" },
+      { id: "id407_clause_2b_date",    label: "Cl.2B commencing on",         type: "date", defaultW: 120 },
+      { id: "id407_clause_2b_prev_no", label: "Cl.2B previous contract no.", type: "text", defaultW: 90  },
+      { id: "id407_residence_1",       label: "Cl.3 Residence (line 1)",     type: "text", defaultW: 170 },
+      { id: "id407_residence_2",       label: "Cl.3 Residence (line 2)",     type: "text", defaultW: 280 },
+      { id: "id407_wages",             label: "Cl.5(a) Monthly wages",       type: "text", defaultW: 90  },
+      { id: "id407_food_allowance",    label: "Cl.5(b) Food allowance",      type: "text", defaultW: 60  },
+      { id: "id407_other_fees",        label: "Cl.8(vi) Other fees",         type: "text", defaultW: 230 },
     ],
   },
   {

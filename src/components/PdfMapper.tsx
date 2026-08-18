@@ -28,8 +28,8 @@ import {
   TICK_LEFT_DX, TICK_LEFT_DY, TICK_RIGHT_DX, TICK_RIGHT_DY,
 } from "@/lib/pdfDraw";
 import {
-  DEFAULT_FORM_ID, FORMS, fieldLookup, getDefaultDims, getForm, templateImageName,
-  type FieldType, type FormDef,
+  DEFAULT_FORM_ID, FORMS, fieldLookup, formFieldIds, getDefaultDims, getForm,
+  templateImageName, type FieldType, type FormDef,
 } from "@/lib/pdfForms";
 
 const BUCKET = "pdf-templates";
@@ -180,6 +180,9 @@ export default function PdfMapper() {
   const SECTIONS     = form.sections;
   const FIELD_LOOKUP = useMemo(() => fieldLookup(form), [form]);
   const dimsFor      = useCallback((id: string) => getDefaultDims(form, id), [form]);
+  // pdf_field_mappings holds every form's rows. Without this the biodata's 157
+  // boxes would all draw on top of ID 407 sheet 1, since both call it page 1.
+  const FORM_IDS     = useMemo(() => formFieldIds(form), [form]);
   const PAGE_NUMBERS = useMemo(
     () => Array.from({ length: form.pages }, (_, i) => i + 1),
     [form],
@@ -598,8 +601,10 @@ export default function PdfMapper() {
 
   // ── Download current mappings as JSON (local backup / base template) ──────────
   const handleDownloadJSON = () => {
-    const rows = Object.values(mappings);
-    if (!rows.length) { showMsg("No mappings to download yet."); return; }
+    // Only this form's rows: page_width_pts below describes one form, so mixing
+    // both in a file would make the exported coordinates meaningless.
+    const rows = Object.values(mappings).filter(m => FORM_IDS.has(m.field_id));
+    if (!rows.length) { showMsg(`No ${form.label} mappings to download yet.`); return; }
 
     const payload = {
       meta: {
@@ -879,7 +884,9 @@ export default function PdfMapper() {
                 {/* Click / marker overlay — always covers the zoom wrapper exactly */}
                 <div ref={overlayRef} onClick={handleOverlayClick}
                   className={`absolute inset-0 ${selectedId ? "cursor-crosshair" : "cursor-default"}`}>
-                  {Object.values(mappings).filter(m => m.page === currentPage).map(m => {
+                  {Object.values(mappings)
+                    .filter(m => m.page === currentPage && FORM_IDS.has(m.field_id))
+                    .map(m => {
                     const tk = (m.field_type in TYPE_STYLE ? m.field_type : "text") as FieldType;
                     const { bg, border } = TYPE_STYLE[tk];
                     const isSel  = selectedId === m.field_id;

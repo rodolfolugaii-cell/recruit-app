@@ -271,7 +271,7 @@ export const FORMS: FormDef[] = [
     sections: ID407_SECTIONS,
     paragraphs: ID407_PARAGRAPHS,
     retired: {},
-    note: "Booklet imposition: sheet 1 is form pages 4 | 1, sheet 2 is pages 2 | 3.",
+    note: "Booklet imposition: sheet 1 is form pages 4 | 1, sheet 2 is pages 2 | 3. Fields are listed in reading order, left column first.",
   },
 ];
 
