@@ -10,6 +10,7 @@ import {
 } from "@/components/TrashZone";
 import ApplicantEditForm, { type EditableApplicant } from "@/components/ApplicantEditForm";
 import ZodiacPanel from "@/components/ZodiacPanel";
+import { kidsOf } from "@/lib/kids";
 
 interface WorkExperienceEntry {
   yearsOfEmployment: string; dateFrom: string; dateTo: string;
@@ -35,7 +36,8 @@ interface Applicant {
     maritalStatus?: string;      education?: string;
     religion?: string;           contractStatus?: string;
     lastWorkingDay?: string;     numberOfKids?: string;
-    boysAges?: string;           girlsAges?: string;
+    boysCount?: string;          boysAges?: string;
+    girlsCount?: string;         girlsAges?: string;
     familyMembersCount?: string; educationCourse?: string;
     totalYearsHK?: string;       numberOfEmployers?: string;
     languages?: { english?: string; cantonese?: string; mandarin?: string; };
@@ -725,6 +727,7 @@ export default function ForReviewDashboard() {
                 const ap = selectedApplicant;
                 const dob = ap.date_of_birth ? new Date(ap.date_of_birth) : null;
                 const age = dob ? String(new Date().getFullYear() - dob.getFullYear()) : "";
+                const kids = kidsOf(fd);
 
                 return (
                   <>
@@ -787,13 +790,16 @@ export default function ForReviewDashboard() {
                           <BiodataFL label="Marital Status:" value={fd?.maritalStatus} cls="flex-1" />
                           <BiodataFL label="Gender:" value={ap.gender} cls="flex-1" />
                         </div>
-                        <div className="flex items-baseline gap-2">
-                          <span className="text-gray-500 whitespace-nowrap">How many kids:</span>
-                          <span className="border-b border-gray-300 w-6 font-medium">{fd?.numberOfKids ?? ""}</span>
-                          <span className="text-gray-500 whitespace-nowrap">B/A:</span>
-                          <span className="border-b border-gray-300 w-14 font-medium">{fd?.boysAges ?? ""}</span>
-                          <span className="text-gray-500 whitespace-nowrap">G/A:</span>
-                          <span className="border-b border-gray-300 w-14 font-medium">{fd?.girlsAges ?? ""}</span>
+                        {/* Four blanks, as on the printed form: Boy/s + Age/s, Girl/s + Age/s */}
+                        <div className="flex items-baseline gap-2 flex-wrap">
+                          <span className="text-gray-500 whitespace-nowrap">Kids — Boy/s:</span>
+                          <span className="border-b border-gray-300 w-6 font-medium">{kids.boys}</span>
+                          <span className="text-gray-500 whitespace-nowrap">Age/s:</span>
+                          <span className="border-b border-gray-300 w-16 font-medium">{kids.boysAges}</span>
+                          <span className="text-gray-500 whitespace-nowrap">Girl/s:</span>
+                          <span className="border-b border-gray-300 w-6 font-medium">{kids.girls}</span>
+                          <span className="text-gray-500 whitespace-nowrap">Age/s:</span>
+                          <span className="border-b border-gray-300 w-16 font-medium">{kids.girlsAges}</span>
                           <span className="text-gray-500 whitespace-nowrap">Family Members:</span>
                           <span className="border-b border-gray-300 w-8 font-medium">{fd?.familyMembersCount ?? ""}</span>
                         </div>

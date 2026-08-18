@@ -23,6 +23,7 @@ import {
   LANG_LEVELS, NATIONALITY_OPTIONS, GENDER_OPTIONS, LOCATION_OPTIONS,
   MARITAL_OPTIONS, RELIGION_OPTIONS,
 } from "@/lib/applicantOptions";
+import { agesMismatch, formatAges, formatCount, kidsOf, resolveCount } from "@/lib/kids";
 
 /* ── Types (structurally match the dashboards' Applicant) ─────────────────── */
 export interface EditableWE {
@@ -44,7 +45,8 @@ export interface EditableApplicant {
     maritalStatus?: string;      education?: string;
     religion?: string;           contractStatus?: string;
     lastWorkingDay?: string;     numberOfKids?: string;
-    boysAges?: string;           girlsAges?: string;
+    boysCount?: string;          boysAges?: string;
+    girlsCount?: string;         girlsAges?: string;
     familyMembersCount?: string; educationCourse?: string;
     totalYearsHK?: string;       numberOfEmployers?: string;
     languages?: { english?: string; cantonese?: string; mandarin?: string };
@@ -91,6 +93,48 @@ function Check({ label, checked, onChange }: { label: string; checked: boolean; 
       </div>
       <span className="text-xs text-gray-700">{label}</span>
     </label>
+  );
+}
+
+/**
+ * A count box plus its comma-separated age list, for one gender.
+ *
+ * A row submitted before the split has ages but no count, so the count input
+ * shows the inferred number as its PLACEHOLDER rather than its value: the
+ * recruiter can see what the export is already using without a saved edit
+ * quietly turning that guess into the applicant's own answer.
+ */
+function KidsPair({
+  label, count, ages, onCount, onAges,
+}: {
+  label: string; count?: string; ages?: string;
+  onCount: (v: string) => void; onAges: (v: string) => void;
+}) {
+  const listed = agesMismatch(count, ages);
+  return (
+    <>
+      <Field label={label}>
+        <input
+          value={count ?? ""}
+          onChange={e => onCount(formatCount(e.target.value))}
+          placeholder={resolveCount(count, ages) || "0"}
+          inputMode="numeric" className={inp}
+        />
+      </Field>
+      <Field label={`${label} — Age/s`}>
+        <input
+          value={ages ?? ""}
+          onChange={e => onAges(e.target.value)}
+          onBlur={e => onAges(formatAges(e.target.value))}
+          placeholder="15, 3, 4" className={inp}
+        />
+        {listed !== null && (
+          <p className="mt-1 text-[11px] text-amber-600">
+            {listed} age{listed === 1 ? "" : "s"} for {formatCount(count)} {label.toLowerCase()}
+          </p>
+        )}
+      </Field>
+    </>
   );
 }
 
@@ -150,19 +194,31 @@ export default function ApplicantEditForm({
     if (!draft.full_name?.trim()) { alert("Full name cannot be empty."); return; }
     setSaving(true);
     try {
+      // The ages go in normalised and the total is re-derived, so a save can
+      // never leave "3 kids" sitting next to one boy and one girl.
+      const kids = kidsOf(draft.form_data);
+      const saved: EditableApplicant = {
+        ...draft,
+        form_data: {
+          ...draft.form_data,
+          boysAges:     kids.boysAges,
+          girlsAges:    kids.girlsAges,
+          numberOfKids: kids.total,
+        },
+      };
       const { error } = await supabase
         .from("applicants")
         .update({
-          full_name:     draft.full_name.trim(),
-          date_of_birth: draft.date_of_birth || null,
-          nationality:   draft.nationality   || null,
-          gender:        draft.gender        || null,
-          mobile:        draft.mobile        || null,
-          form_data:     draft.form_data,
+          full_name:     saved.full_name.trim(),
+          date_of_birth: saved.date_of_birth || null,
+          nationality:   saved.nationality   || null,
+          gender:        saved.gender        || null,
+          mobile:        saved.mobile        || null,
+          form_data:     saved.form_data,
         })
-        .eq("id", draft.id);
+        .eq("id", saved.id);
       if (error) throw error;
-      onSaved(draft);
+      onSaved(saved);
     } catch (err) {
       alert("Failed to save changes: " + (err instanceof Error ? err.message : String(err)));
     } finally {
@@ -226,17 +282,26 @@ export default function ApplicantEditForm({
               {RELIGION_OPTIONS.map(v => <option key={v}>{v}</option>)}
             </select>
           </Field>
-          <Field label="No. of Kids">
-            <input value={fd.numberOfKids ?? ""} onChange={e => setFd("numberOfKids", e.target.value)} className={inp} />
-          </Field>
-          <Field label="Boys' Ages">
-            <input value={fd.boysAges ?? ""} onChange={e => setFd("boysAges", e.target.value)} className={inp} />
-          </Field>
-          <Field label="Girls' Ages">
-            <input value={fd.girlsAges ?? ""} onChange={e => setFd("girlsAges", e.target.value)} className={inp} />
-          </Field>
           <Field label="Family Members">
             <input value={fd.familyMembersCount ?? ""} onChange={e => setFd("familyMembersCount", e.target.value)} className={inp} />
+          </Field>
+        </div>
+
+        {/* ── Kids — four blanks, as the printed biodata asks ── */}
+        <Section title="Kids" />
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <KidsPair
+            label="Boy/s" count={fd.boysCount} ages={fd.boysAges}
+            onCount={v => setFd("boysCount", v)} onAges={v => setFd("boysAges", v)}
+          />
+          <KidsPair
+            label="Girl/s" count={fd.girlsCount} ages={fd.girlsAges}
+            onCount={v => setFd("girlsCount", v)} onAges={v => setFd("girlsAges", v)}
+          />
+          <Field label="Total No. of Kids">
+            {/* Sum of the two counts — kept read-only so it can never contradict them */}
+            <input value={kidsOf(fd).total} readOnly tabIndex={-1}
+              className={`${inp} bg-gray-50 text-gray-500 cursor-default`} />
           </Field>
         </div>
 

@@ -7,6 +7,7 @@ import {
   SKILL_OPTIONS, COOKING_OPTIONS, HOUSEHOLD_CHORES,
   EDUCATION_OPTIONS, CONTRACT_STATUS_OPTIONS, WE_CONTRACT_STATUS_OPTIONS,
 } from "@/lib/applicantOptions";
+import { agesMismatch, formatAges, formatCount, kidsOf, kidsSummary } from "@/lib/kids";
 
 /* ── Types ──────────────────────────────────────────────────────────────── */
 interface WorkExperienceEntry {
@@ -30,7 +31,11 @@ interface FormState {
   gender: string; mobile: string; currentLocation: string; height: string;
   weight: string; maritalStatus: string; religion: string;
   contractStatus: string; lastWorkingDay: string;
-  numberOfKids: string; boysAges: string; girlsAges: string; familyMembersCount: string;
+  // Four blanks, exactly as the printed biodata asks: Boy/s + Age/s over
+  // Girl/s + Age/s. The total is derived at submit, never typed.
+  boysCount: string;  boysAges: string;
+  girlsCount: string; girlsAges: string;
+  familyMembersCount: string;
   education: string; educationCourse: string;
   totalYearsHK: string; numberOfEmployers: string;
   langEnglish: string; langCantonese: string; langMandarin: string;
@@ -64,7 +69,7 @@ const INITIAL: FormState = {
   fullName: "", dob: "", placeOfBirth: "", nationality: "", gender: "",
   mobile: "", currentLocation: "", height: "", weight: "", maritalStatus: "",
   religion: "", contractStatus: "", lastWorkingDay: "",
-  numberOfKids: "", boysAges: "", girlsAges: "", familyMembersCount: "",
+  boysCount: "", boysAges: "", girlsCount: "", girlsAges: "", familyMembersCount: "",
   education: "", educationCourse: "", totalYearsHK: "", numberOfEmployers: "",
   langEnglish: "", langCantonese: "", langMandarin: "", specialSkills: "",
   skills: [], cookingAbilities: [],
@@ -103,6 +108,46 @@ function CheckItem({ label, checked, onChange }: { label: string; checked: boole
       </div>
       <span className="text-sm text-gray-700">{label}</span>
     </label>
+  );
+}
+
+/**
+ * One gender's line from the printed form: a narrow count box, then the ages as
+ * a comma-separated list. The ages are tidied on blur rather than on every
+ * keystroke, so typing "15, 3" is never fought mid-word.
+ */
+function KidsRow({
+  label, count, ages, onCount, onAges,
+}: {
+  label: string; count: string; ages: string;
+  onCount: (v: string) => void; onAges: (v: string) => void;
+}) {
+  const listed = agesMismatch(count, ages);
+  return (
+    <div className="grid grid-cols-3 gap-4">
+      <div>
+        <label className={lbl}>{label}</label>
+        <input
+          value={count}
+          onChange={e => onCount(formatCount(e.target.value))}
+          type="number" min="0" placeholder="0" className={inp}
+        />
+      </div>
+      <div className="col-span-2">
+        <label className={lbl}>Age/s</label>
+        <input
+          value={ages}
+          onChange={e => onAges(e.target.value)}
+          onBlur={e => onAges(formatAges(e.target.value))}
+          type="text" placeholder="e.g. 15, 3, 4" className={inp}
+        />
+        {listed !== null && (
+          <p className="mt-1 text-xs text-amber-600">
+            {listed} age{listed === 1 ? "" : "s"} listed for {count} {label.toLowerCase()} — please check.
+          </p>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -146,6 +191,10 @@ export default function ApplicantForm() {
   const setWE   = (i: number, k: keyof WorkExperienceEntry, v: any)    => setData(p => { const we = [...p.workExperience]; we[i] = { ...we[i], [k]: v }; return { ...p, workExperience: we }; });
   const addWE   = ()                                                     => { if (data.workExperience.length < 4) setData(p => ({ ...p, workExperience: [...p.workExperience, emptyWE()] })); };
   const removeWE = (i: number)                                           => setData(p => ({ ...p, workExperience: p.workExperience.filter((_, idx) => idx !== i) }));
+
+  // Boy/s + Girl/s counts and age lists, resolved once for the running total,
+  // the review summary and the submitted payload.
+  const kids = kidsOf(data);
 
   /* ── Photo ── */
   const handlePhoto = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -197,8 +246,10 @@ export default function ApplicantForm() {
           height: data.height, weight: data.weight, maritalStatus: data.maritalStatus,
           education: data.education, religion: data.religion,
           contractStatus: data.contractStatus, lastWorkingDay: data.lastWorkingDay,
-          numberOfKids: data.numberOfKids, boysAges: data.boysAges,
-          girlsAges: data.girlsAges, familyMembersCount: data.familyMembersCount,
+          boysCount: kids.boys,   boysAges: kids.boysAges,
+          girlsCount: kids.girls, girlsAges: kids.girlsAges,
+          numberOfKids: kids.total,   // kept so older readers still find a total
+          familyMembersCount: data.familyMembersCount,
           educationCourse: data.educationCourse, totalYearsHK: data.totalYearsHK,
           numberOfEmployers: data.numberOfEmployers,
           languages: { english: data.langEnglish, cantonese: data.langCantonese, mandarin: data.langMandarin },
@@ -328,24 +379,32 @@ export default function ApplicantForm() {
             </div>
           </div>
 
-          {/* Family */}
+          {/* Family — one row per gender, mirroring the printed biodata:
+              "Boy/s: ___ Age/s: ___" over "Girl/s: ___ Age/s: ___" */}
           <SectionTitle>Family</SectionTitle>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div>
-              <label className={lbl}>No. of Kids</label>
-              <input value={data.numberOfKids} onChange={e => set("numberOfKids", e.target.value)} type="number" min="0" placeholder="0" className={inp} />
-            </div>
-            <div>
-              <label className={lbl}>Boys — Ages</label>
-              <input value={data.boysAges} onChange={e => set("boysAges", e.target.value)} type="text" placeholder='e.g. "3, 7"' className={inp} />
-            </div>
-            <div>
-              <label className={lbl}>Girls — Ages</label>
-              <input value={data.girlsAges} onChange={e => set("girlsAges", e.target.value)} type="text" placeholder='e.g. "5"' className={inp} />
-            </div>
-            <div>
-              <label className={lbl}>Family Members</label>
-              <input value={data.familyMembersCount} onChange={e => set("familyMembersCount", e.target.value)} type="number" min="0" placeholder="0" className={inp} />
+          <p className="-mt-1 mb-3 text-xs text-gray-400">
+            Give each child&apos;s age, separated by commas — e.g. <span className="font-medium text-gray-500">15, 3, 4</span>
+          </p>
+          <div className="space-y-4">
+            <KidsRow
+              label="Boy/s" count={data.boysCount} ages={data.boysAges}
+              onCount={v => set("boysCount", v)} onAges={v => set("boysAges", v)}
+            />
+            <KidsRow
+              label="Girl/s" count={data.girlsCount} ages={data.girlsAges}
+              onCount={v => set("girlsCount", v)} onAges={v => set("girlsAges", v)}
+            />
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className={lbl}>Total No. of Kids</label>
+                {/* Adds up the two counts above — nothing to type, nothing to contradict */}
+                <input value={kids.total} readOnly tabIndex={-1} placeholder="0"
+                  className={`${inp} bg-gray-50 text-gray-500 cursor-default`} />
+              </div>
+              <div>
+                <label className={lbl}>Family Members</label>
+                <input value={data.familyMembersCount} onChange={e => set("familyMembersCount", e.target.value)} type="number" min="0" placeholder="0" className={inp} />
+              </div>
             </div>
           </div>
 
@@ -602,6 +661,7 @@ export default function ApplicantForm() {
               ["Total Years HK", data.totalYearsHK],
               ["No. of Employers", data.numberOfEmployers],
               ["Contract Status", data.contractStatus],
+              ["Kids",           kidsSummary(data)],
               ["Family Members", data.familyMembersCount],
             ] as [string, string][]).map(([k, v]) => (
               <div key={k} className="p-2.5 bg-white border border-gray-100 rounded-lg">

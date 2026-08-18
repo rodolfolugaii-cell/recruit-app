@@ -208,8 +208,12 @@ const SECTIONS: Section[] = [
       { id: "height",         label: "Height",         type: "text", defaultW: 36  },
       { id: "weight",         label: "Weight",         type: "text", defaultW: 36  },
       { id: "marital_status", label: "Marital Status", type: "text", defaultW: 84  },
-      { id: "kids_boys",      label: "Kids – Boys",    type: "text", defaultW: 50  },
-      { id: "kids_girls",     label: "Kids – Girls",   type: "text", defaultW: 50  },
+      // The form has four blanks — "Boy/s: __ Age/s: __" over "Girl/s: __ Age/s: __".
+      // A count box holds one or two digits; an age box holds a list like "15, 3, 4".
+      { id: "kids_boys_count",  label: "Kids – Boy/s (no.)",  type: "text", defaultW: 20 },
+      { id: "kids_boys_ages",   label: "Kids – Boy/s Age/s",  type: "text", defaultW: 52 },
+      { id: "kids_girls_count", label: "Kids – Girl/s (no.)", type: "text", defaultW: 20 },
+      { id: "kids_girls_ages",  label: "Kids – Girl/s Age/s", type: "text", defaultW: 52 },
     ],
   },
   {
@@ -349,6 +353,21 @@ for (let n = 1; n <= 3; n++) {
   });
 }
 
+// ── Retired field ids ─────────────────────────────────────────────────────────
+// Boy/s and Girl/s used to be a single box each, and it received the AGES even
+// though it sat on the count blank. Both are now a count box plus an age box, so
+// the old id maps onto the count — same blank, same position. Only the position
+// carries over: w/h are reset to the narrow count default, since the mapper sets
+// a box's size from defaultW when it is first placed and offers no way to shrink
+// one afterwards. The two new Age/s boxes still have to be placed by hand.
+//
+// The retired rows stay in pdf_field_mappings, unread — no section declares them
+// and buildValues() no longer supplies a value, so the export skips them.
+const RETIRED_FIELD_IDS: Record<string, string> = {
+  kids_boys:  "kids_boys_count",
+  kids_girls: "kids_girls_count",
+};
+
 const FIELD_LOOKUP: Record<string, FieldDef & { sectionPage: 1 | 2 }> = {};
 SECTIONS.forEach(sec => sec.fields.forEach(f => { FIELD_LOOKUP[f.id] = { ...f, sectionPage: sec.page }; }));
 
@@ -468,8 +487,30 @@ export default function PdfMapper() {
           }
           map[row.field_id] = row;
         });
+
+        // Carry retired ids onto their replacement, then drop them from view
+        let carried = 0;
+        Object.entries(RETIRED_FIELD_IDS).forEach(([oldId, newId]) => {
+          const legacy = map[oldId];
+          if (!legacy) return;
+          delete map[oldId];
+          if (map[newId]) return;            // already placed — keep what is there
+          const def  = FIELD_LOOKUP[newId];
+          const dims = getDefaultDims(newId);
+          map[newId] = {
+            ...legacy,
+            field_id: newId,
+            label:      def?.label ?? newId,
+            field_type: def?.type  ?? legacy.field_type,
+            w: dims.w, h: dims.h,
+          };
+          carried++;
+        });
+
         setMappings(map);
-        showMsg(`Loaded ${Object.keys(map).length} saved mappings`);
+        showMsg(carried
+          ? `Loaded ${Object.keys(map).length} mappings — Boy/s and Girl/s are now a count box + an Age/s box. Place the 2 new Age/s boxes, then Save All.`
+          : `Loaded ${Object.keys(map).length} saved mappings`);
       }
     })();
   }, []);

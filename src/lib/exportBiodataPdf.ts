@@ -12,6 +12,7 @@
 
 import { PDFDocument, rgb, StandardFonts, LineCapStyle, PDFFont } from "pdf-lib";
 import { supabase } from "./supabase";
+import { kidsOf } from "./kids";
 
 // ── PDF coordinate constants ──────────────────────────────────────────────────
 const PDF_W    = 595.276;
@@ -84,8 +85,10 @@ export interface ApplicantForExport {
     religion?:          string;
     contractStatus?:    string;
     lastWorkingDay?:    string;
-    numberOfKids?:      string;
+    numberOfKids?:      string;   // total; derived from the two counts on new rows
+    boysCount?:         string;
     boysAges?:          string;
+    girlsCount?:        string;
     girlsAges?:         string;
     familyMembersCount?: string;
     educationCourse?:   string;
@@ -204,6 +207,7 @@ function buildValues(ap: ApplicantForExport): Record<string, string | boolean> {
   const age = dob ? String(new Date().getFullYear() - dob.getFullYear()) : "";
   const skills   = fd.skills           ?? [];
   const cooking  = fd.cookingAbilities ?? [];
+  const kids     = kidsOf(fd);
 
   const v: Record<string, string | boolean> = {
     // ── Application header ────────────────────────────────────────────────
@@ -231,8 +235,12 @@ function buildValues(ap: ApplicantForExport): Record<string, string | boolean> {
     height:                fd.height  ? `${fd.height} cm`  : "",
     weight:                fd.weight  ? `${fd.weight} kg`  : "",
     marital_status:        fd.maritalStatus ?? "",
-    kids_boys:             fd.boysAges     ?? "",
-    kids_girls:            fd.girlsAges    ?? "",
+    // Four blanks on the form: a count and an age list per gender. The count
+    // falls back to how many ages were listed on rows that predate the split.
+    kids_boys_count:       kids.boys,
+    kids_boys_ages:        kids.boysAges,
+    kids_girls_count:      kids.girls,
+    kids_girls_ages:       kids.girlsAges,
 
     // ── Spoken language (checkboxes) ──────────────────────────────────────
     english_basic:         fd.languages?.english   === "Basic",
