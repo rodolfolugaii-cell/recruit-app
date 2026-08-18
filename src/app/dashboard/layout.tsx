@@ -53,6 +53,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     pathname === "/dashboard/review"     ? "For Review"       :
     pathname === "/dashboard/pdf-mapper" ? "PDF Field Mapper" :
     pathname === "/dashboard/trash"      ? "Trash"            :
+    pathname === "/dashboard/employers"  ? "Employers"        :
     "Application Submissions";
 
   if (checkingAuth) {
@@ -110,6 +111,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           <Link href="/dashboard/review" title="For Review" data-review-drop="true" className={navClass("/dashboard/review")}>
             <span className="text-xl leading-none flex-shrink-0">📋</span>
             {!collapsed && <span className="whitespace-nowrap">For Review</span>}
+          </Link>
+
+          {/* ── Employers — the households helpers get placed with ───── */}
+          <Link href="/dashboard/employers" title="Employers" className={navClass("/dashboard/employers")}>
+            <span className="text-xl leading-none flex-shrink-0">🏢</span>
+            {!collapsed && <span className="whitespace-nowrap">Employers</span>}
           </Link>
 
           {/* ── NEW: PDF Mapper ──────────────────────────────────────── */}

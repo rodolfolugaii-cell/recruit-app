@@ -11,6 +11,7 @@ import {
 import ApplicantEditForm, { type EditableApplicant } from "@/components/ApplicantEditForm";
 import ZodiacPanel from "@/components/ZodiacPanel";
 import { kidsOf } from "@/lib/kids";
+import { EmployerBadge, EmployerPicker, useEmployerDirectory } from "@/components/EmployerAssign";
 
 interface WorkExperienceEntry {
   yearsOfEmployment: string; dateFrom: string; dateTo: string;
@@ -30,6 +31,8 @@ interface Applicant {
   signature_url?: string | null;
   signed_at?: string | null;
   status: string;
+  /** The employer this helper is placed with — null until she is assigned. */
+  employer_id?: string | null;
   form_data: {
     placeOfBirth?: string;       currentLocation?: string;
     height?: string;             weight?: string;
@@ -205,6 +208,8 @@ function BiodataWE({ entry }: { entry: WorkExperienceEntry | null }) {
 export default function ForReviewDashboard() {
   const [applicants, setApplicants]      = useState<Applicant[]>([]);
   const [loading, setLoading]            = useState(true);
+  // Employer names for the card badges and the picker in the profile modal
+  const { employers, byId: employersById } = useEmployerDirectory();
   const [selectedApplicant, setSelected] = useState<Applicant | null>(null);
   const [movingBackId, setMovingBackId]  = useState<string | null>(null);
   const [exporting, setExporting]        = useState(false);
@@ -344,6 +349,18 @@ export default function ForReviewDashboard() {
     setSelected((p) => (p?.id === updated.id ? { ...p, ...(updated as unknown as Partial<Applicant>) } : p));
     setEditing(false);
   }, []);
+
+  /* ── Employer assignment ── */
+  // EmployerPicker has already written the change, so this only mirrors it into
+  // the card behind the modal — the badge updates without a refetch.
+  const handleEmployerAssigned = useCallback((employerId: string | null) => {
+    const id = selectedApplicant?.id;
+    if (!id) return;
+    setApplicants((list) =>
+      list.map((a) => (a.id === id ? { ...a, employer_id: employerId } : a))
+    );
+    setSelected((p) => (p?.id === id ? { ...p, employer_id: employerId } : p));
+  }, [selectedApplicant]);
 
   /* ── Export filled biodata PDF ── */
   const handleExportPdf = useCallback(async () => {
@@ -578,6 +595,10 @@ export default function ForReviewDashboard() {
                     <span className="inline-block mt-2 text-[10px] bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full font-semibold">
                       For Review
                     </span>
+                    <EmployerBadge
+                      employer={applicant.employer_id ? employersById.get(applicant.employer_id) : null}
+                      className="mt-1.5 block w-fit"
+                    />
                     {applicant.form_data?.contractStatus && (
                       <span className="inline-block mt-1 text-[10px] bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">
                         {applicant.form_data.contractStatus}
@@ -700,10 +721,29 @@ export default function ForReviewDashboard() {
             className="bg-white rounded-xl max-w-6xl w-full max-h-[90vh] overflow-y-auto shadow-xl border border-gray-200 flex flex-col"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="p-3 border-b border-gray-200 flex justify-between items-center bg-white">
-              <h2 className="text-xs font-bold text-gray-600 uppercase tracking-widest">
+            <div className="p-3 border-b border-gray-200 flex justify-between items-center gap-4 bg-white">
+              <h2 className="text-xs font-bold text-gray-600 uppercase tracking-widest flex-shrink-0">
                 {editing ? "Editing Biodata" : "Applicant Biodata"}
               </h2>
+
+              {/* Placement lives here rather than in the edit form: it is not part
+                  of what the applicant submitted, and it saves on its own. */}
+              {!editing && (
+                <div className="flex items-center gap-2 min-w-0 ml-auto mr-2">
+                  <span className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider whitespace-nowrap hidden sm:block">
+                    Employer
+                  </span>
+                  <div className="w-52 max-w-[45vw]">
+                    <EmployerPicker
+                      applicantId={selectedApplicant.id}
+                      value={selectedApplicant.employer_id}
+                      employers={employers}
+                      onAssigned={handleEmployerAssigned}
+                    />
+                  </div>
+                </div>
+              )}
+
               <button
                 onClick={() => { if (!editing || confirm("Discard unsaved changes?")) { setEditing(false); setSelected(null); } }}
                 className="text-gray-400 hover:text-gray-600 text-2xl font-semibold leading-none p-2"

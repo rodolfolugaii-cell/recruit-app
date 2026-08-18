@@ -8,6 +8,7 @@ import {
   isPointOverTrash, DELETED_STATUS,
 } from "@/components/TrashZone";
 import { kidsOf } from "@/lib/kids";
+import { EmployerBadge, useEmployerDirectory } from "@/components/EmployerAssign";
 
 interface WorkExperienceEntry {
   yearsOfEmployment: string; dateFrom: string; dateTo: string;
@@ -27,6 +28,8 @@ interface Applicant {
   signature_url?: string | null;
   signed_at?: string | null;
   status: string;
+  /** The employer this helper is placed with — null until she is assigned. */
+  employer_id?: string | null;
   form_data: {
     placeOfBirth?: string;       currentLocation?: string;
     height?: string;             weight?: string;
@@ -204,6 +207,8 @@ function BiodataWE({ entry }: { entry: WorkExperienceEntry | null }) {
 export default function RecruiterDashboard() {
   const [applicants, setApplicants]         = useState<Applicant[]>([]);
   const [loading, setLoading]               = useState(true);
+  // Employer names for the card badges — never blocks the applicant list
+  const { byId: employersById } = useEmployerDirectory();
   const [selectedApplicant, setSelected]    = useState<Applicant | null>(null);
   const [sendingId, setSendingId]           = useState<string | null>(null);
   const [pressingId, setPressingId]         = useState<string | null>(null);
@@ -556,6 +561,10 @@ export default function RecruiterDashboard() {
                     <span className="inline-block mt-2 text-[10px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full font-semibold">
                       {applicant.status || "New"}
                     </span>
+                    <EmployerBadge
+                      employer={applicant.employer_id ? employersById.get(applicant.employer_id) : null}
+                      className="mt-1.5 block w-fit"
+                    />
                     {applicant.form_data?.contractStatus && (
                       <span className="inline-block mt-1 text-[10px] bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">
                         {applicant.form_data.contractStatus}
