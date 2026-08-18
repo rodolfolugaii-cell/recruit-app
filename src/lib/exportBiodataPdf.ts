@@ -10,66 +10,32 @@
  * ────────────────────────────────────────────────────────────────────────────
  */
 
-import { PDFDocument, rgb, StandardFonts, LineCapStyle, PDFFont } from "pdf-lib";
-import { supabase } from "./supabase";
+import { PDFDocument, StandardFonts } from "pdf-lib";
 import { kidsOf } from "./kids";
+import { ageFrom, formDate } from "./formDates";
+import {
+  downloadPdf, drawImageField, flowParagraphs, safeFilename, stampFields,
+  type FieldValues,
+} from "./pdfDraw";
+import { fetchAllMappings, fetchTemplateImage, mappingsForForm, resetPdfTemplateCache } from "./pdfTemplates";
+import { formFieldIds, getForm, templateImageName } from "./pdfForms";
 
-// ── PDF coordinate constants ──────────────────────────────────────────────────
-const PDF_W    = 595.276;
-const PDF_H    = 841.89;
-const BUCKET   = "pdf-templates";
-const TXT_SIZE = 8;   // pt — fallback text size when nothing is configured
+// PDF Mapper draws its checkbox markers at these sizes; re-exported so it can
+// keep importing them from here rather than knowing about pdfDraw.
+export {
+  CHECKBOX_SIZE, TICK_SIZE, TICK_WEIGHT,
+  TICK_LEFT_DX, TICK_LEFT_DY, TICK_RIGHT_DX, TICK_RIGHT_DY,
+} from "./pdfDraw";
 
-// ── Checkbox geometry ─────────────────────────────────────────────────────────
-// PDF Mapper draws every checkbox marker as a fixed CHECKBOX_SIZE square
-// anchored at (x, y) — whatever w/h the row happens to store. These constants
-// are shared with the mapper so the preview and the print agree exactly.
-export const CHECKBOX_SIZE = 12;   // pt — the marker square in PDF Mapper
-export const TICK_SIZE     = 9;    // pt — overall span of the drawn ✓
-export const TICK_WEIGHT   = 1.4;  // pt — stroke thickness
-// Arm proportions, relative to TICK_SIZE, measured from the vertex
-export const TICK_LEFT_DX  = 0.35;
-export const TICK_LEFT_DY  = 0.50;
-export const TICK_RIGHT_DX = 0.65;
-export const TICK_RIGHT_DY = 0.80;
+const BIODATA = getForm("biodata");
 
-// ── Paragraph fields ──────────────────────────────────────────────────────────
-// Some answers are free text that outgrows the blank it starts on. The form
-// gives them a run of ruled lines, and the mapper declares one field per line —
-// "Duties (line 1)" is the short blank beside the label, "(line 2)" the full
-// width one under it.
-//
-// buildValues() puts the whole answer on the FIRST id of a group; the rest are
-// continuation lines. flowParagraph() then re-splits it across whichever of
-// those boxes the recruiter actually placed, so the text wraps onto the blank
-// below instead of being cut off with an ellipsis on line 1.
-//
-// To give a field more room, add its next line id here and place that box in
-// PDF Mapper — nothing else needs to change.
-// How small a paragraph may go to avoid losing words. 5pt is about the floor for
-// something a person still has to read off a printed form.
-const PARAGRAPH_MIN_SIZE = 5;
-const PARAGRAPH_SIZE_STEP = 0.5;
-
-const PARAGRAPH_GROUPS: string[][] = [
-  ["country_a_duties_1", "country_a_duties_2"],
-  ["country_b_duties_1", "country_b_duties_2"],
-];
-
-// Row in pdf_field_mappings that stores global settings (not a real field).
-// Its font_size is the default applied to any field without its own size.
-const SETTINGS_ROW_ID = "__settings__";
-
-// ── Types (mirror the ForReviewDashboard interfaces) ─────────────────────────
-interface FieldMapping {
-  field_id:   string;
-  field_type: string;  // 'text' | 'checkbox' | 'date' | 'image' | 'signature'
-  page:       number;
-  x:          number;
-  y:          number;  // from TOP of page (pdfplumber convention)
-  w:          number;
-  h:          number;
-  font_size?: number | null;  // pt — null/absent = use the global default
+/**
+ * Drop the cached mappings / template images so the next export re-fetches.
+ * Called by PDF Mapper after saving, so size and position changes show up
+ * immediately without a page reload.
+ */
+export function resetBiodataPdfCache(): void {
+  resetPdfTemplateCache();
 }
 
 export interface WEEntry {
@@ -136,171 +102,6 @@ export interface ApplicantForExport {
   };
 }
 
-// ── In-session cache (avoids re-fetching on every export) ─────────────────────
-let _mappingsCache: FieldMapping[] | null = null;
-let _defaultTxtSize = TXT_SIZE;
-const _imgCache = new Map<number, Uint8Array>();
-
-/**
- * Drop the cached mappings / template images so the next export re-fetches.
- * Called by PDF Mapper after saving, so size and position changes show up
- * immediately without a page reload.
- */
-export function resetBiodataPdfCache(): void {
-  _mappingsCache  = null;
-  _defaultTxtSize = TXT_SIZE;
-  _imgCache.clear();
-}
-
-async function fetchMappings(): Promise<FieldMapping[]> {
-  if (_mappingsCache) return _mappingsCache;
-  const { data, error } = await supabase.from("pdf_field_mappings").select("*");
-  if (error) throw new Error(`Could not load field mappings: ${error.message}`);
-  if (!data?.length) throw new Error("No field mappings found. Set them up in PDF Mapper first.");
-
-  const rows = data as FieldMapping[];
-
-  // Pull the global default text size out of the settings row, then drop it —
-  // it is not a real field and must never be stamped onto the page.
-  const settings  = rows.find(r => r.field_id === SETTINGS_ROW_ID);
-  _defaultTxtSize = settings?.font_size && settings.font_size > 0
-    ? settings.font_size
-    : TXT_SIZE;
-
-  _mappingsCache = rows.filter(r => r.field_id !== SETTINGS_ROW_ID);
-  if (!_mappingsCache.length) throw new Error("No field mappings found. Set them up in PDF Mapper first.");
-  return _mappingsCache;
-}
-
-// Per-field size, falling back to the global default
-function sizeFor(m: FieldMapping): number {
-  return m.font_size && m.font_size > 0 ? m.font_size : _defaultTxtSize;
-}
-
-/**
- * Shrink `text` with a trailing ellipsis until it fits `maxW` at `size`.
- * Uses real Helvetica glyph widths rather than a character-count estimate,
- * so truncation stays correct at any font size.
- */
-function fitText(text: string, font: PDFFont, size: number, maxW: number): string {
-  if (maxW <= 0) return "";
-  if (font.widthOfTextAtSize(text, size) <= maxW) return text;
-  let t = text;
-  while (t.length > 1 && font.widthOfTextAtSize(`${t}…`, size) > maxW) {
-    t = t.slice(0, -1);
-  }
-  return `${t}…`;
-}
-
-/**
- * Greedy word-wrap of `text` across a run of boxes, one line each.
- *
- * Boxes are filled in order and may differ in width and font size — line 1 of a
- * duties field is short because the printed label eats into it, line 2 spans the
- * page. Only the LAST box ellipsises: everything still unplaced has nowhere left
- * to go. Returns one string per box, "" for any that end up unused.
- */
-function wrapAcross(
-  text: string,
-  font: PDFFont,
-  boxes: { size: number; maxW: number }[],
-): { lines: string[]; overflow: boolean } {
-  const words = text.split(/\s+/).filter(Boolean);
-  const out: string[] = [];
-  let overflow = false;
-  let w = 0;
-
-  boxes.forEach((box, i) => {
-    if (w >= words.length) { out.push(""); return; }
-
-    // Last box takes whatever is left, ellipsised if it overflows
-    if (i === boxes.length - 1) {
-      const rest   = words.slice(w).join(" ");
-      const fitted = fitText(rest, font, box.size, box.maxW);
-      if (fitted !== rest) overflow = true;
-      out.push(fitted);
-      w = words.length;
-      return;
-    }
-
-    let line = "";
-    while (w < words.length) {
-      const next = line ? `${line} ${words[w]}` : words[w];
-      if (font.widthOfTextAtSize(next, box.size) > box.maxW) {
-        // A single word wider than an empty box would spin here forever. Take
-        // it (trimmed to fit) rather than dropping it, and start the next line.
-        if (!line) { line = fitText(words[w], font, box.size, box.maxW); w++; overflow = true; }
-        break;
-      }
-      line = next;
-      w++;
-    }
-    out.push(line);
-  });
-
-  return { lines: out, overflow };
-}
-
-/**
- * Spread every paragraph group's answer across the line boxes that were mapped,
- * shrinking the type only as far as it takes to get all of it onto the page.
- *
- * Two ruled lines at 8pt hold roughly seventy characters, and a real job-duties
- * answer runs longer than that, so flowing onto line 2 alone still ends in an
- * ellipsis. Losing the tail of what someone wrote is worse than a smaller point
- * size, so the paragraph steps down to PARAGRAPH_MIN_SIZE before it truncates.
- *
- * The whole group shares one size — a paragraph whose second line is visibly
- * smaller than its first reads as a mistake. Any size chosen here is recorded in
- * `sizeOverrides` for the drawing loop; fields that fit at their configured size
- * are left out of it entirely.
- */
-function flowParagraphs(
-  values: Record<string, string | boolean>,
-  mappings: FieldMapping[],
-  font: PDFFont,
-  sizeOverrides: Map<string, number>,
-): void {
-  for (const ids of PARAGRAPH_GROUPS) {
-    const text = values[ids[0]];
-    if (typeof text !== "string" || text.trim() === "") continue;
-
-    const placed = ids
-      .map(id => ({ id, m: mappings.find(f => f.field_id === id) }))
-      .filter((e): e is { id: string; m: FieldMapping } => !!e.m);
-    if (!placed.length) continue;
-
-    // Uppercased here because the drawing loop uppercases too — measuring the
-    // original would under-read the width and let capitals overflow.
-    const upper = text.toUpperCase();
-    const start = Math.min(...placed.map(({ m }) => sizeFor(m)));
-
-    let size   = start;
-    let result = wrapAcross(upper, font, placed.map(({ m }) => ({ size, maxW: m.w - 2 })));
-    while (result.overflow && size > PARAGRAPH_MIN_SIZE) {
-      size   = Math.max(PARAGRAPH_MIN_SIZE, size - PARAGRAPH_SIZE_STEP);
-      result = wrapAcross(upper, font, placed.map(({ m }) => ({ size, maxW: m.w - 2 })));
-    }
-
-    placed.forEach(({ id }, i) => {
-      values[id] = result.lines[i] ?? "";
-      if (size !== start) sizeOverrides.set(id, size);
-    });
-  }
-}
-
-async function fetchPageImage(page: number): Promise<Uint8Array> {
-  if (_imgCache.has(page)) return _imgCache.get(page)!;
-  const { data } = supabase.storage.from(BUCKET).getPublicUrl(`biodata-p${page}.png`);
-  const res = await fetch(data.publicUrl);
-  if (!res.ok) throw new Error(
-    `Page ${page} template image not found (${res.status}). Upload it first in PDF Mapper → 📤 Upload PDF.`
-  );
-  const bytes = new Uint8Array(await res.arrayBuffer());
-  _imgCache.set(page, bytes);
-  return bytes;
-}
-
 /**
  * First given name only — the Name field on the biodata prints just the first
  * name, never the surname.
@@ -323,8 +124,7 @@ function firstNameOf(fullName: string | null | undefined): string {
 // Values: string → drawn as text; true → draws a filled checkbox square; false/undefined → skipped
 function buildValues(ap: ApplicantForExport): Record<string, string | boolean> {
   const fd  = ap.form_data ?? {};
-  const dob = ap.date_of_birth ? new Date(ap.date_of_birth) : null;
-  const age = dob ? String(new Date().getFullYear() - dob.getFullYear()) : "";
+  const age = ageFrom(ap.date_of_birth);
   const skills   = fd.skills           ?? [];
   const cooking  = fd.cookingAbilities ?? [];
   const kids     = kidsOf(fd);
@@ -342,13 +142,11 @@ function buildValues(ap: ApplicantForExport): Record<string, string | boolean> {
     contract_plan_break:   fd.contractStatus === "Plan to Break",
     contract_terminated:   fd.contractStatus === "Terminated" ||
                            fd.contractStatus === "Break of Contract",
-    last_working_day:      fd.lastWorkingDay
-                             ? new Date(fd.lastWorkingDay).toLocaleDateString("en-GB")
-                             : "",
+    last_working_day:      formDate(fd.lastWorkingDay),
 
     // ── Personal details ──────────────────────────────────────────────────
     full_name:             firstNameOf(ap.full_name),   // first name only on the form
-    date_of_birth:         dob ? dob.toLocaleDateString("en-GB") : "",
+    date_of_birth:         formDate(ap.date_of_birth),
     nationality:           ap.nationality  ?? "",
     religion:              fd.religion     ?? "",
     age,
@@ -478,162 +276,49 @@ function buildValues(ap: ApplicantForExport): Record<string, string | boolean> {
   return v;
 }
 
-// ── Coordinate conversion ─────────────────────────────────────────────────────
-// Our mappings use top-left origin (pdfplumber); pdf-lib uses bottom-left.
-// This returns the y-coordinate of the BOTTOM edge of the field zone.
-function toLibY(m: FieldMapping): number {
-  return PDF_H - m.y - m.h;
-}
-
 // ── Main export ───────────────────────────────────────────────────────────────
 export async function exportBiodataPdf(applicant: ApplicantForExport): Promise<void> {
-  // 1. Load all resources in parallel
-  const [mappings, p1Bytes, p2Bytes] = await Promise.all([
-    fetchMappings(),
-    fetchPageImage(1),
-    fetchPageImage(2),
+  // 1. Load positions and both template pages together
+  const [{ rows, defaultSize }, ...images] = await Promise.all([
+    fetchAllMappings(),
+    ...Array.from({ length: BIODATA.pages }, (_, i) =>
+      fetchTemplateImage(templateImageName(BIODATA, i + 1), BIODATA.label)),
   ]);
 
-  // 2. Create the PDF document
+  const mappings = mappingsForForm(rows, formFieldIds(BIODATA));
+  if (!mappings.length) {
+    throw new Error("No biodata field mappings found. Set them up in PDF Mapper first.");
+  }
+
+  // 2. One page per template image, the image as its background
   const pdfDoc = await PDFDocument.create();
   const font   = await pdfDoc.embedFont(StandardFonts.Helvetica);
-  const black  = rgb(0, 0, 0);
+  const pages  = await Promise.all(images.map(async (bytes) => {
+    const img  = await pdfDoc.embedPng(bytes);
+    const page = pdfDoc.addPage([BIODATA.width, BIODATA.height]);
+    page.drawImage(img, { x: 0, y: 0, width: BIODATA.width, height: BIODATA.height });
+    return page;
+  }));
 
-  // 3. Add both pages with the template as background
-  const [img1, img2] = await Promise.all([
-    pdfDoc.embedPng(p1Bytes),
-    pdfDoc.embedPng(p2Bytes),
-  ]);
-  const page1 = pdfDoc.addPage([PDF_W, PDF_H]);
-  const page2 = pdfDoc.addPage([PDF_W, PDF_H]);
-  page1.drawImage(img1, { x: 0, y: 0, width: PDF_W, height: PDF_H });
-  page2.drawImage(img2, { x: 0, y: 0, width: PDF_W, height: PDF_H });
-  const pages = [page1, page2];
-
-  // 4. Build the field-value map, then spread the long free-text answers over
-  //    the ruled lines the form gives them
-  const values = buildValues(applicant);
+  // 3. Values, then spread the long free-text answers over their ruled lines
+  const values: FieldValues = buildValues(applicant);
   const sizeOverrides = new Map<string, number>();
-  flowParagraphs(values, mappings, font, sizeOverrides);
+  flowParagraphs(values, mappings, font, BIODATA.paragraphs, defaultSize, sizeOverrides);
 
-  // 5. Embed applicant photo if available
-  const photoMap = mappings.find(m => m.field_id === "photo");
-  if (photoMap && applicant.photo_url) {
-    try {
-      const res       = await fetch(applicant.photo_url);
-      const photoData = new Uint8Array(await res.arrayBuffer());
-      const ct        = res.headers.get("content-type") ?? "";
-      const photoImg  = ct.includes("png")
-        ? await pdfDoc.embedPng(photoData)
-        : await pdfDoc.embedJpg(photoData);
-      pages[photoMap.page - 1].drawImage(photoImg, {
-        x:      photoMap.x,
-        y:      toLibY(photoMap),
-        width:  photoMap.w,
-        height: photoMap.h,
-      });
-    } catch {
-      // Photo failed — leave the box blank, keep going
-    }
-  }
-
-  // 5b. Embed the signature, scaled to FIT its box rather than stretched.
-  // The pad exports a transparent PNG cropped to the ink, so preserving the
-  // aspect ratio is what keeps handwriting from looking squashed.
-  const sigMap = mappings.find(m => m.field_id === "signature");
-  if (sigMap && applicant.signature_url) {
-    try {
-      const res     = await fetch(applicant.signature_url);
-      const sigData = new Uint8Array(await res.arrayBuffer());
-      const sigImg  = await pdfDoc.embedPng(sigData);
-
-      const scale = Math.min(sigMap.w / sigImg.width, sigMap.h / sigImg.height);
-      const w     = sigImg.width  * scale;
-      const h     = sigImg.height * scale;
-
-      pages[sigMap.page - 1].drawImage(sigImg, {
-        x:      sigMap.x + (sigMap.w - w) / 2,   // centred in the mapped box
-        y:      toLibY(sigMap) + (sigMap.h - h) / 2,
-        width:  w,
-        height: h,
-      });
-    } catch {
-      // Signature failed or the applicant predates the feature — leave it blank
-    }
-  }
-
-  // 6. Stamp every mapped field
-  for (const m of mappings) {
-    if (m.field_id === "photo" || m.field_id === "signature") continue;
-
-    const value = values[m.field_id];
-    if (value === undefined || value === null || value === "" || value === false) continue;
-
+  // 4. Photo fills its box; the signature is scaled to fit so handwriting keeps
+  //    its shape. Both are skipped silently when absent.
+  const imageJobs: Promise<void>[] = [];
+  const place = (fieldId: string, url: string | null | undefined, mode: "fill" | "contain") => {
+    const m = mappings.find(x => x.field_id === fieldId);
+    if (!m || !url) return;
     const page = pages[m.page - 1];
-    if (!page) continue;
+    if (page) imageJobs.push(drawImageField(pdfDoc, page, m, url, BIODATA.height, mode));
+  };
+  place("photo",     applicant.photo_url,     "fill");
+  place("signature", applicant.signature_url, "contain");
+  await Promise.all(imageJobs);
 
-    const libY = toLibY(m);
-
-    if (m.field_type === "checkbox" && value === true) {
-      // The VERTEX of the ✓ — where the two strokes meet — lands exactly on the
-      // centre of the square drawn in PDF Mapper. Previously the tick's bounding
-      // box was centred instead, which pushed the point down-left of the target.
-      //
-      // The centre is derived from CHECKBOX_SIZE, not m.w/m.h, because the mapper
-      // renders checkboxes at that fixed size whatever the row stores. Rows that
-      // kept text-shaped defaults (w = 100, h = 14) would otherwise put the tick
-      // tens of points away from where the recruiter clicked.
-      const cx = m.x + CHECKBOX_SIZE / 2;
-      const cy = PDF_H - (m.y + CHECKBOX_SIZE / 2);   // top-left origin → pdf-lib
-
-      // Short arm: down from upper-left into the vertex
-      page.drawLine({
-        start:     { x: cx - TICK_SIZE * TICK_LEFT_DX, y: cy + TICK_SIZE * TICK_LEFT_DY },
-        end:       { x: cx,                            y: cy },
-        thickness: TICK_WEIGHT,
-        color:     black,
-        lineCap:   LineCapStyle.Round,
-      });
-      // Long arm: up from the vertex to the upper-right
-      page.drawLine({
-        start:     { x: cx,                             y: cy },
-        end:       { x: cx + TICK_SIZE * TICK_RIGHT_DX, y: cy + TICK_SIZE * TICK_RIGHT_DY },
-        thickness: TICK_WEIGHT,
-        color:     black,
-        lineCap:   LineCapStyle.Round,
-      });
-    } else if (typeof value === "string" && value.trim() !== "") {
-      // Per-field size (falls back to the global default set in PDF Mapper),
-      // unless a paragraph had to shrink to fit all its words on the form
-      const size = sizeOverrides.get(m.field_id) ?? sizeFor(m);
-      // The biodata form asks for CAPITAL letters, so every value is upper-cased.
-      // Done before fitText so the width measurement matches what actually
-      // prints — capitals are wider, and measuring the original would let text
-      // overflow its box.
-      const text = fitText(value.toUpperCase(), font, size, m.w - 2);
-      page.drawText(text, {
-        x:    m.x + 1,
-        y:    libY + 2,   // 2pt padding from the bottom of the field zone
-        size,
-        font,
-        color: black,
-      });
-    }
-  }
-
-  // 7. Save and trigger browser download
-  const bytes    = await pdfDoc.save();
-  // TypeScript strict-mode fix: cast buffer — pdf-lib never returns SharedArrayBuffer
-  const blob     = new Blob([bytes.buffer as ArrayBuffer], { type: "application/pdf" });
-  const url      = URL.createObjectURL(blob);
-  const link     = document.createElement("a");
-  const safeName = (applicant.full_name ?? "Applicant")
-    .replace(/[^a-zA-Z0-9 ]/g, "")
-    .trim();
-  link.href     = url;
-  link.download = `${safeName} - Biodata.pdf`;
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  URL.revokeObjectURL(url);
+  // 5. Stamp the rest and hand it over
+  stampFields(pages, mappings, values, font, BIODATA.height, defaultSize, sizeOverrides);
+  downloadPdf(await pdfDoc.save(), safeFilename(applicant.full_name, "Biodata"));
 }

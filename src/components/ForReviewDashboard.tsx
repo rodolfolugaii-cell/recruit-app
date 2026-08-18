@@ -12,6 +12,7 @@ import ApplicantEditForm, { type EditableApplicant } from "@/components/Applican
 import ZodiacPanel from "@/components/ZodiacPanel";
 import { kidsOf } from "@/lib/kids";
 import { EmployerBadge, EmployerPicker, useEmployerDirectory } from "@/components/EmployerAssign";
+import { createContract, placeOfOriginFor, signingLink } from "@/lib/contracts";
 
 interface WorkExperienceEntry {
   yearsOfEmployment: string; dateFrom: string; dateTo: string;
@@ -210,6 +211,7 @@ export default function ForReviewDashboard() {
   const [loading, setLoading]            = useState(true);
   // Employer names for the card badges and the picker in the profile modal
   const { employers, byId: employersById } = useEmployerDirectory();
+  const [creatingContract, setCreatingContract] = useState(false);
   const [selectedApplicant, setSelected] = useState<Applicant | null>(null);
   const [movingBackId, setMovingBackId]  = useState<string | null>(null);
   const [exporting, setExporting]        = useState(false);
@@ -360,6 +362,37 @@ export default function ForReviewDashboard() {
       list.map((a) => (a.id === id ? { ...a, employer_id: employerId } : a))
     );
     setSelected((p) => (p?.id === id ? { ...p, employer_id: employerId } : p));
+  }, [selectedApplicant]);
+
+  /* ── Start an ID 407 contract ── */
+  // Only the details we already hold are seeded — the wage, the commencement
+  // basis and the duties are commercial terms, set deliberately on the
+  // Contracts page rather than guessed here.
+  const handleCreateContract = useCallback(async () => {
+    const ap = selectedApplicant;
+    if (!ap?.employer_id) return;
+    setCreatingContract(true);
+    try {
+      const contract = await createContract(ap.id, ap.employer_id, {
+        placeOfOrigin: placeOfOriginFor(ap.nationality),
+        contractDate:  new Date().toISOString().slice(0, 10),
+      });
+      const link = signingLink(contract.employer_token);
+      try { await navigator.clipboard.writeText(link); } catch { /* insecure context */ }
+      alert(
+        `Contract created.
+
+The employer's signing link has been copied to your clipboard:
+
+${link}
+
+Both links, the terms and the witnesses are on the Contracts page.`
+      );
+    } catch (e) {
+      alert("Could not create the contract: " + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setCreatingContract(false);
+    }
   }, [selectedApplicant]);
 
   /* ── Export filled biodata PDF ── */
@@ -1042,6 +1075,18 @@ export default function ForReviewDashboard() {
                 {movingBackId === selectedApplicant.id ? "Moving…" : "Move Back to Candidates"}
               </button>
               <div className="flex items-center gap-2">
+                {/* A contract needs an employer to be against, so this only
+                    appears once she has been assigned one. */}
+                {selectedApplicant.employer_id && (
+                  <button
+                    onClick={handleCreateContract}
+                    disabled={creatingContract}
+                    title="Create an ID 407 contract and get the signing links"
+                    className="bg-white text-slate-700 border border-slate-300 px-5 py-2.5 rounded-lg text-sm font-medium hover:bg-slate-50 transition-colors disabled:opacity-50"
+                  >
+                    {creatingContract ? "Creating…" : "📄 Create Contract"}
+                  </button>
+                )}
                 <button
                   onClick={() => setEditing(true)}
                   className="bg-white text-slate-700 border border-slate-300 px-5 py-2.5 rounded-lg text-sm font-medium hover:bg-slate-50 transition-colors"

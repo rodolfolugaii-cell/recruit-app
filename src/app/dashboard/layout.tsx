@@ -54,6 +54,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     pathname === "/dashboard/pdf-mapper" ? "PDF Field Mapper" :
     pathname === "/dashboard/trash"      ? "Trash"            :
     pathname === "/dashboard/employers"  ? "Employers"        :
+    pathname === "/dashboard/contracts"  ? "Contracts"        :
     "Application Submissions";
 
   if (checkingAuth) {
@@ -117,6 +118,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           <Link href="/dashboard/employers" title="Employers" className={navClass("/dashboard/employers")}>
             <span className="text-xl leading-none flex-shrink-0">🏢</span>
             {!collapsed && <span className="whitespace-nowrap">Employers</span>}
+          </Link>
+
+          {/* ── Contracts — ID 407, and the links that get it signed ─── */}
+          <Link href="/dashboard/contracts" title="Contracts" className={navClass("/dashboard/contracts")}>
+            <span className="text-xl leading-none flex-shrink-0">📄</span>
+            {!collapsed && <span className="whitespace-nowrap">Contracts</span>}
           </Link>
 
           {/* ── NEW: PDF Mapper ──────────────────────────────────────── */}

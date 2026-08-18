@@ -18,23 +18,7 @@
  * recruiter, so this module is the other half of that contract.
  *
  * ── Requires ────────────────────────────────────────────────────────────────
- *   CREATE TABLE IF NOT EXISTS employers (
- *     id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
- *     created_at    TIMESTAMPTZ DEFAULT NOW(),
- *     name          TEXT NOT NULL,
- *     banner_url    TEXT,
- *     logo_url      TEXT,
- *     contact_person TEXT,
- *     phone         TEXT,
- *     email         TEXT,
- *     address       TEXT,
- *     status        TEXT DEFAULT 'Active',
- *     employer_data JSONB DEFAULT '{}'::jsonb
- *   );
- *
- *   ALTER TABLE applicants
- *     ADD COLUMN IF NOT EXISTS employer_id   UUID REFERENCES employers(id) ON DELETE SET NULL,
- *     ADD COLUMN IF NOT EXISTS contract_data JSONB;
+ * supabase/migrations/20260818000300_employers.sql — see supabase/README.md.
  * ────────────────────────────────────────────────────────────────────────────
  */
 
@@ -128,7 +112,7 @@ export function emptyEmployer(): Omit<Employer, "id" | "created_at"> {
 export function employerSetupHint(message: string): string | null {
   if (!/employers/i.test(message)) return null;
   if (/does not exist|schema cache|relation/i.test(message)) {
-    return "The `employers` table has not been created yet. Ask your administrator to run the SQL in src/lib/employers.ts.";
+    return "The `employers` table has not been created yet. Ask your administrator to run the migrations in supabase/migrations/ (see supabase/README.md).";
   }
   return null;
 }

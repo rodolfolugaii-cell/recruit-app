@@ -15,9 +15,8 @@
  * it can be restored or erased for good. Nothing is removed from Supabase here.
  *
  * ── Requires (one-time) ─────────────────────────────────────────────────────
- *   ALTER TABLE applicants
- *     ADD COLUMN IF NOT EXISTS deleted_at   TIMESTAMPTZ,
- *     ADD COLUMN IF NOT EXISTS deleted_from TEXT;
+ *   The deleted_at / deleted_from columns from
+ *   supabase/migrations/20260818000100_applicants.sql.
  *
  *   deleted_from remembers which board the card came from, so Restore puts it
  *   back where it belongs instead of always landing in Candidates.

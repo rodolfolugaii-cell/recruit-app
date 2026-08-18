@@ -105,7 +105,7 @@ export function EmployerPicker({
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setError(/employer_id/.test(msg)
-        ? "Assignment needs a one-time database update — see the SQL in src/lib/employers.ts."
+        ? "Assignment needs a one-time database update — run the migrations in supabase/migrations/."
         : msg);
     } finally {
       setSaving(false);

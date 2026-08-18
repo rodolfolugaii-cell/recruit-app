@@ -12,9 +12,8 @@
  * so "who / when / where from" matters more than the full profile.
  *
  * ── Requires ────────────────────────────────────────────────────────────────
- *   ALTER TABLE applicants
- *     ADD COLUMN IF NOT EXISTS deleted_at   TIMESTAMPTZ,
- *     ADD COLUMN IF NOT EXISTS deleted_from TEXT;
+ * The deleted_at / deleted_from columns from
+ * supabase/migrations/20260818000100_applicants.sql.
  * ────────────────────────────────────────────────────────────────────────────
  */
 

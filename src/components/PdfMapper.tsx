@@ -1,54 +1,37 @@
 "use client";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// SUPABASE SETUP (one-time, do this before using the mapper)
+// SETUP (one-time, before using the mapper)
 // ─────────────────────────────────────────────────────────────────────────────
-// 1. Go to Supabase → Storage → New bucket
-//    Name:   pdf-templates
-//    Public: YES (toggle on)
+// 1. Run supabase/migrations/20260818000200_pdf_field_mappings.sql, which
+//    creates the table this page reads and writes. See supabase/README.md.
 //
-// 2. Run this in SQL Editor to create the mappings table:
+// 2. Create a PUBLIC Storage bucket named `pdf-templates` for the rendered
+//    page images.
 //
-//    CREATE TABLE IF NOT EXISTS pdf_field_mappings (
-//      id         UUID    DEFAULT gen_random_uuid() PRIMARY KEY,
-//      field_id   TEXT    NOT NULL UNIQUE,
-//      label      TEXT    NOT NULL,
-//      field_type TEXT    NOT NULL,
-//      page       INTEGER NOT NULL DEFAULT 1,
-//      x          FLOAT   NOT NULL DEFAULT 0,
-//      y          FLOAT   NOT NULL DEFAULT 0,
-//      w          FLOAT   NOT NULL DEFAULT 100,
-//      h          FLOAT   NOT NULL DEFAULT 14,
-//      font_size  FLOAT,                        -- pt; NULL = use global default
-//      updated_at TIMESTAMPTZ DEFAULT NOW()
-//    );
+// 3. Upload the biodata PDF once with the "📤 Upload PDF" button. Both pages are
+//    rendered and saved to Storage, so every recruiter loads the same template.
 //
-// 2b. UPGRADING an existing table? Run this once to add text-size support:
+// 4. (Optional) "📂 Import JSON" → biodata_field_mapping.json to pre-populate
+//    all 157 positions, then "💾 Save All".
 //
-//    ALTER TABLE pdf_field_mappings ADD COLUMN IF NOT EXISTS font_size FLOAT;
-//
-//    The global default size lives in a reserved row with
-//    field_id = '__settings__'. It is written automatically by "Save All"
-//    and is skipped when generating PDFs.
-//
-// 3. Upload the PDF once using the "📤 Upload PDF" button.
-//    Both pages are rendered and saved to Storage automatically.
-//    Every recruiter then loads the same images on next visit.
-//
-// 4. (Optional) Click "📂 Import JSON" → load biodata_field_mapping.json
-//    to pre-populate all 157 positions → click "💾 Save All".
+// The global default text size lives in a reserved row with
+// field_id = '__settings__'. It is written by "Save All" and skipped when
+// generating PDFs.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
+import { resetPdfTemplateCache } from "@/lib/pdfTemplates";
 import {
-  resetBiodataPdfCache,
   CHECKBOX_SIZE, TICK_SIZE, TICK_WEIGHT,
   TICK_LEFT_DX, TICK_LEFT_DY, TICK_RIGHT_DX, TICK_RIGHT_DY,
-} from "@/lib/exportBiodataPdf";
+} from "@/lib/pdfDraw";
+import {
+  DEFAULT_FORM_ID, FORMS, fieldLookup, getDefaultDims, getForm, templateImageName,
+  type FieldType, type FormDef,
+} from "@/lib/pdfForms";
 
-const PDF_W = 595.276;
-const PDF_H = 841.89;
 const BUCKET = "pdf-templates";
 
 // ── Text size ────────────────────────────────────────────────────────────────
@@ -75,12 +58,12 @@ async function ensurePdfJs(): Promise<any> {
   return (window as any).pdfjsLib;
 }
 
-async function pdfToDataUrls(file: File): Promise<Record<number, string>> {
+async function pdfToDataUrls(file: File, maxPages: number): Promise<Record<number, string>> {
   const pdfjs = await ensurePdfJs();
   const buffer = await file.arrayBuffer();
   const pdf = await pdfjs.getDocument({ data: new Uint8Array(buffer) }).promise;
   const out: Record<number, string> = {};
-  for (let i = 1; i <= Math.min(pdf.numPages, 2); i++) {
+  for (let i = 1; i <= Math.min(pdf.numPages, maxPages); i++) {
     const page = await pdf.getPage(i);
     const viewport = page.getViewport({ scale: 1.5 });
     const canvas = document.createElement("canvas");
@@ -93,28 +76,29 @@ async function pdfToDataUrls(file: File): Promise<Record<number, string>> {
 }
 
 // ── Supabase Storage helpers ──────────────────────────────────────────────────
-function storageUrl(page: number): string {
+function storageUrl(form: FormDef, page: number): string {
   const { data } = supabase.storage
     .from(BUCKET)
-    .getPublicUrl(`biodata-p${page}.png`);
+    .getPublicUrl(templateImageName(form, page));
   // Cache-bust so the browser re-fetches after a new upload
   return `${data.publicUrl}?t=${Date.now()}`;
 }
 
 async function uploadPageToStorage(
   dataUrl: string,
+  form: FormDef,
   page: number
 ): Promise<string | null> {
   try {
     const blob = await (await fetch(dataUrl)).blob();
     const { error } = await supabase.storage
       .from(BUCKET)
-      .upload(`biodata-p${page}.png`, blob, {
+      .upload(templateImageName(form, page), blob, {
         contentType: "image/png",
         upsert: true,  // overwrite the old template if one already exists
       });
     if (error) throw error;
-    return storageUrl(page);
+    return storageUrl(form, page);
   } catch (err: any) {
     console.error("Storage upload error:", err);
     return null;
@@ -122,9 +106,8 @@ async function uploadPageToStorage(
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
-type FieldType = "text" | "checkbox" | "date" | "image" | "signature";
-interface FieldDef  { id: string; label: string; type: FieldType; defaultW?: number; defaultH?: number; }
-interface Section   { title: string; page: 1 | 2; fields: FieldDef[]; }
+// FieldType / FieldDef / FormSection describe what a form HAS; Mapping is the
+// row in pdf_field_mappings saying where one of those fields sits.
 interface Mapping   { field_id: string; label: string; field_type: string; page: number; x: number; y: number; w: number; h: number; font_size?: number | null; }
 
 // Only these types print text, so only they get a size control
@@ -182,200 +165,6 @@ const TYPE_STYLE: Record<FieldType, { bg: string; border: string; badge: string;
   signature: { bg: "bg-red-400/20",    border: "border-red-500",    badge: "bg-red-100 text-red-700",      dot: "bg-red-500"    },
 };
 
-// ── Field sections ─────────────────────────────────────────────────────────────
-const SECTIONS: Section[] = [
-  {
-    title: "Application Info", page: 1,
-    fields: [
-      { id: "application_no",      label: "Application No.",           type: "text",    defaultW: 220 },
-      { id: "photo",               label: "Photo",                     type: "image",   defaultW: 100, defaultH: 100 },
-      { id: "is_firstimer",        label: "First-timer",              type: "checkbox" },
-      { id: "contract_finished",   label: "Finished Contract",        type: "checkbox" },
-      { id: "contract_plan_break", label: "Plan to Break",            type: "checkbox" },
-      { id: "contract_terminated", label: "Terminated / Break",       type: "checkbox" },
-      { id: "last_working_day",    label: "Last Working Day",         type: "text",    defaultW: 66  },
-      { id: "signature",           label: "Applicant Signature",      type: "signature", defaultW: 130, defaultH: 34 },
-    ],
-  },
-  {
-    title: "Personal Details", page: 1,
-    fields: [
-      { id: "full_name",      label: "Full Name",      type: "text", defaultW: 128 },
-      { id: "date_of_birth",  label: "Date of Birth",  type: "date", defaultW: 68  },
-      { id: "nationality",    label: "Nationality",    type: "text", defaultW: 100 },
-      { id: "religion",       label: "Religion",       type: "text", defaultW: 108 },
-      { id: "age",            label: "Age",            type: "text", defaultW: 45  },
-      { id: "height",         label: "Height",         type: "text", defaultW: 36  },
-      { id: "weight",         label: "Weight",         type: "text", defaultW: 36  },
-      { id: "marital_status", label: "Marital Status", type: "text", defaultW: 84  },
-      // The form has four blanks — "Boy/s: __ Age/s: __" over "Girl/s: __ Age/s: __".
-      // A count box holds one or two digits; an age box holds a list like "15, 3, 4".
-      { id: "kids_boys_count",  label: "Kids – Boy/s (no.)",  type: "text", defaultW: 20 },
-      { id: "kids_boys_ages",   label: "Kids – Boy/s Age/s",  type: "text", defaultW: 52 },
-      { id: "kids_girls_count", label: "Kids – Girl/s (no.)", type: "text", defaultW: 20 },
-      { id: "kids_girls_ages",  label: "Kids – Girl/s Age/s", type: "text", defaultW: 52 },
-    ],
-  },
-  {
-    title: "Spoken Language", page: 1,
-    fields: [
-      { id: "english_basic",   label: "English – Basic",   type: "checkbox" },
-      { id: "english_good",    label: "English – Good",    type: "checkbox" },
-      { id: "cantonese_basic", label: "Cantonese – Basic", type: "checkbox" },
-      { id: "cantonese_good",  label: "Cantonese – Good",  type: "checkbox" },
-      { id: "mandarin_basic",  label: "Mandarin – Basic",  type: "checkbox" },
-      { id: "mandarin_good",   label: "Mandarin – Good",   type: "checkbox" },
-    ],
-  },
-  {
-    title: "Education", page: 1,
-    fields: [
-      { id: "edu_high_school",       label: "High School Graduate", type: "checkbox" },
-      { id: "edu_vocational",        label: "Vocational Course",    type: "checkbox" },
-      { id: "edu_college_undergrad", label: "College Undergrad",    type: "checkbox" },
-      { id: "edu_college_grad",      label: "College Graduate",     type: "checkbox" },
-      { id: "course_name",           label: "Course Name",          type: "text", defaultW: 100 },
-      { id: "total_yrs_hk",          label: "Total Years in HK",    type: "text", defaultW: 90  },
-      { id: "how_many_employers",    label: "How Many Employers",   type: "text", defaultW: 100 },
-    ],
-  },
-  {
-    title: "Other Country Exp.", page: 1,
-    fields: [
-      { id: "country_a_name",     label: "Country A – Employer",        type: "text", defaultW: 226 },
-      { id: "country_a_yrs",      label: "Country A – Years",           type: "text", defaultW: 78  },
-      { id: "country_a_duties_1", label: "Country A – Duties (line 1)", type: "text", defaultW: 120 },
-      { id: "country_a_duties_2", label: "Country A – Duties (line 2)", type: "text", defaultW: 227 },
-      { id: "country_b_name",     label: "Country B – Employer",        type: "text", defaultW: 225 },
-      { id: "country_b_yrs",      label: "Country B – Years",           type: "text", defaultW: 78  },
-      { id: "country_b_duties_1", label: "Country B – Duties (line 1)", type: "text", defaultW: 120 },
-      { id: "country_b_duties_2", label: "Country B – Duties (line 2)", type: "text", defaultW: 227 },
-    ],
-  },
-  {
-    title: "My Skills", page: 1,
-    fields: [
-      { id: "skill_household_chores", label: "Household Chores",    type: "checkbox" },
-      { id: "skill_cooking",          label: "Cooking",             type: "checkbox" },
-      { id: "skill_child_care",       label: "Child Care",          type: "checkbox" },
-      { id: "skill_newborn_care",     label: "New Born Care",       type: "checkbox" },
-      { id: "skill_special_child",    label: "Special Child Care",  type: "checkbox" },
-      { id: "skill_elderly_care",     label: "Elderly Care",        type: "checkbox" },
-      { id: "skill_disabled_care",    label: "Disabled Person",     type: "checkbox" },
-      { id: "skill_pet_care",         label: "Pet Care",            type: "checkbox" },
-      { id: "skill_driving",          label: "Driving",             type: "checkbox" },
-      { id: "skill_car_washing",      label: "Car Washing",         type: "checkbox" },
-      { id: "skill_plant_care",       label: "Plant Care",          type: "checkbox" },
-      { id: "skill_kids_tutorial",    label: "Kids Tutorial",       type: "checkbox" },
-      { id: "skill_nursing_aide",     label: "Nursing Aide",        type: "checkbox" },
-      { id: "pref_sunday_off",        label: "Sunday Off",          type: "checkbox" },
-      { id: "pref_flexible_day",      label: "Flexible Day Off",    type: "checkbox" },
-      { id: "willing_stay_in",        label: "Stay-in Employer",    type: "checkbox" },
-      { id: "willing_other_helper",   label: "Other Helper",        type: "checkbox" },
-    ],
-  },
-  {
-    title: "Cooking Abilities", page: 1,
-    fields: [
-      { id: "cook_western",       label: "Western Food",             type: "checkbox" },
-      { id: "cook_asian",         label: "Asian Food",               type: "checkbox" },
-      { id: "cook_mediterranean", label: "Mediterranean Food",       type: "checkbox" },
-      { id: "cook_baking",        label: "Baking",                   type: "checkbox" },
-      { id: "cook_recipe_book",   label: "Follow Recipe / Cook Book",type: "checkbox" },
-    ],
-  },
-  {
-    title: "Current Working Exp. (HK)", page: 1,
-    fields: [
-      { id: "cwe_yrs",                  label: "Years of Employment",  type: "text",    defaultW: 47  },
-      { id: "cwe_date_from",            label: "Date From (mm/yyyy)",  type: "date",    defaultW: 53  },
-      { id: "cwe_date_to",              label: "Date To (mm/yyyy)",    type: "date",    defaultW: 48  },
-      { id: "cwe_location",             label: "Location",             type: "text",    defaultW: 132 },
-      { id: "cwe_flat_size",            label: "Flat / House Size",    type: "text",    defaultW: 49  },
-      { id: "cwe_contract_finished",    label: "Finished Contract",    type: "checkbox" },
-      { id: "cwe_plan_break",           label: "Plan to Break",        type: "checkbox" },
-      { id: "cwe_family_members",       label: "Family Members",       type: "text",    defaultW: 32  },
-      { id: "cwe_terminated_reason",    label: "Terminated Reason",    type: "text",    defaultW: 120 },
-      { id: "cwe_co_helper_count",      label: "No. of Co-helper",     type: "text",    defaultW: 33  },
-      { id: "cwe_break_reason",         label: "Break Reason",         type: "text",    defaultW: 195 },
-      { id: "cwe_employer_nationality", label: "Employer Nationality", type: "text",    defaultW: 142 },
-      { id: "jd_household_chores",      label: "JD: Household Chores",type: "checkbox" },
-      { id: "jd_cooking",               label: "JD: Cooking",         type: "checkbox" },
-      { id: "jd_child_care",            label: "JD: Child Care",      type: "checkbox" },
-      { id: "jd_newborn_care",          label: "JD: New Born Care",   type: "checkbox" },
-      { id: "jd_special_child",         label: "JD: Special Child",   type: "checkbox" },
-      { id: "jd_elderly_care",          label: "JD: Elderly Care",    type: "checkbox" },
-      { id: "jd_disabled_care",         label: "JD: Disabled Care",   type: "checkbox" },
-      { id: "jd_pet_care",              label: "JD: Pet Care",        type: "checkbox" },
-      { id: "jd_driving",               label: "JD: Driving",         type: "checkbox" },
-      { id: "jd_car_washing",           label: "JD: Car Washing",     type: "checkbox" },
-      { id: "jd_plant_gardening",       label: "JD: Plant / Gardening",type:"checkbox" },
-      { id: "jd_others_text",           label: "JD: Others (text)",   type: "text",    defaultW: 80  },
-    ],
-  },
-];
-
-// Auto-generate WE 1/2/3 for page 2
-const WE_TEMPLATE: FieldDef[] = [
-  { id:"we{N}_yrs",               label:"WE{N}: Years",               type:"text",    defaultW:48  },
-  { id:"we{N}_date_from",         label:"WE{N}: Date From",           type:"date",    defaultW:52  },
-  { id:"we{N}_date_to",           label:"WE{N}: Date To",             type:"date",    defaultW:48  },
-  { id:"we{N}_location",          label:"WE{N}: Location",            type:"text",    defaultW:131 },
-  { id:"we{N}_flat_size",         label:"WE{N}: Flat Size",           type:"text",    defaultW:49  },
-  { id:"we{N}_contract_finished", label:"WE{N}: Finished Contract",   type:"checkbox" },
-  { id:"we{N}_plan_break",        label:"WE{N}: Plan to Break",       type:"checkbox" },
-  { id:"we{N}_family_members",    label:"WE{N}: Family Members",      type:"text",    defaultW:32  },
-  { id:"we{N}_terminated_reason", label:"WE{N}: Terminated Reason",   type:"text",    defaultW:120 },
-  { id:"we{N}_co_helper",         label:"WE{N}: Co-helper Count",     type:"text",    defaultW:33  },
-  { id:"we{N}_break_reason",      label:"WE{N}: Break Reason",        type:"text",    defaultW:195 },
-  { id:"we{N}_employer_nat",      label:"WE{N}: Employer Nationality",type:"text",    defaultW:142 },
-  { id:"we{N}_jd_household",      label:"WE{N} JD: Household Chores",type:"checkbox" },
-  { id:"we{N}_jd_cooking",        label:"WE{N} JD: Cooking",         type:"checkbox" },
-  { id:"we{N}_jd_child_care",     label:"WE{N} JD: Child Care",      type:"checkbox" },
-  { id:"we{N}_jd_newborn",        label:"WE{N} JD: New Born Care",   type:"checkbox" },
-  { id:"we{N}_jd_special_child",  label:"WE{N} JD: Special Child",   type:"checkbox" },
-  { id:"we{N}_jd_elderly",        label:"WE{N} JD: Elderly Care",    type:"checkbox" },
-  { id:"we{N}_jd_disabled",       label:"WE{N} JD: Disabled Care",   type:"checkbox" },
-  { id:"we{N}_jd_pet",            label:"WE{N} JD: Pet Care",        type:"checkbox" },
-  { id:"we{N}_jd_driving",        label:"WE{N} JD: Driving",         type:"checkbox" },
-  { id:"we{N}_jd_car_wash",       label:"WE{N} JD: Car Washing",     type:"checkbox" },
-  { id:"we{N}_jd_plant",          label:"WE{N} JD: Plant Care",      type:"checkbox" },
-  { id:"we{N}_jd_others",         label:"WE{N} JD: Others",          type:"text",    defaultW:76  },
-];
-for (let n = 1; n <= 3; n++) {
-  SECTIONS.push({
-    title: `Work Experience ${n} (Page 2)`, page: 2,
-    fields: WE_TEMPLATE.map(f => ({
-      ...f,
-      id:    f.id.replace(/{N}/g, String(n)),
-      label: f.label.replace(/{N}/g, String(n)),
-    })),
-  });
-}
-
-// ── Retired field ids ─────────────────────────────────────────────────────────
-// Boy/s and Girl/s used to be a single box each, and it received the AGES even
-// though it sat on the count blank. Both are now a count box plus an age box, so
-// the old id maps onto the count — same blank, same position. Only the position
-// carries over: w/h are reset to the narrow count default, since the mapper sets
-// a box's size from defaultW when it is first placed and offers no way to shrink
-// one afterwards. The two new Age/s boxes still have to be placed by hand.
-//
-// The retired rows stay in pdf_field_mappings, unread — no section declares them
-// and buildValues() no longer supplies a value, so the export skips them.
-const RETIRED_FIELD_IDS: Record<string, string> = {
-  kids_boys:  "kids_boys_count",
-  kids_girls: "kids_girls_count",
-};
-
-const FIELD_LOOKUP: Record<string, FieldDef & { sectionPage: 1 | 2 }> = {};
-SECTIONS.forEach(sec => sec.fields.forEach(f => { FIELD_LOOKUP[f.id] = { ...f, sectionPage: sec.page }; }));
-
-function getDefaultDims(id: string) {
-  const d = FIELD_LOOKUP[id];
-  return { w: d?.defaultW ?? (d?.type === "checkbox" ? 12 : 100), h: d?.defaultH ?? (d?.type === "checkbox" ? 12 : d?.type === "image" ? 100 : 14) };
-}
-
 const ZOOM_LEVELS = [50, 75, 100, 125, 150, 175, 200];
 const BASE_W = 540; // base PDF panel width in px at 100% zoom
 
@@ -383,7 +172,20 @@ const BASE_W = 540; // base PDF panel width in px at 100% zoom
 export default function PdfMapper() {
   const [mappings, setMappings]       = useState<Record<string, Mapping>>({});
   const [selectedId, setSelectedId]   = useState<string | null>(null);
-  const [currentPage, setCurrentPage] = useState<1 | 2>(1);
+  const [formId, setFormId] = useState<string>(DEFAULT_FORM_ID);
+  const form = useMemo(() => getForm(formId), [formId]);
+
+  const PDF_W        = form.width;
+  const PDF_H        = form.height;
+  const SECTIONS     = form.sections;
+  const FIELD_LOOKUP = useMemo(() => fieldLookup(form), [form]);
+  const dimsFor      = useCallback((id: string) => getDefaultDims(form, id), [form]);
+  const PAGE_NUMBERS = useMemo(
+    () => Array.from({ length: form.pages }, (_, i) => i + 1),
+    [form],
+  );
+
+  const [currentPage, setCurrentPage] = useState<number>(1);
   const [saveStatus, setSaveStatus]   = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [statusMsg, setStatusMsg]     = useState("");
   const [expanded, setExpanded]       = useState<Record<string, boolean>>(
@@ -452,17 +254,21 @@ export default function PdfMapper() {
 
   const showUploadZone = !pageImages[currentPage] || imgFailed[currentPage];
 
-  // ── On mount: load template images from Supabase Storage ────────────────────
+  // ── Load this form's template images from Storage ───────────────────────────
+  // Runs again on a form switch: the sheets are different files, and showing the
+  // previous form's scan under the new form's boxes would be worse than a blank.
   useEffect(() => {
     const loadFromStorage = async () => {
       setLoadingStorage(true);
+      setPageImages({});
+      setImgFailed({});
       const imgs: Record<number, string> = {};
-      // Check both pages exist by listing the bucket
-      const { data: files } = await supabase.storage.from(BUCKET).list("", { search: "biodata-p" });
+      const { data: files } = await supabase.storage.from(BUCKET).list("", { search: `${form.id}-p` });
       const names = new Set(files?.map(f => f.name) ?? []);
-      [1, 2].forEach(p => {
-        if (names.has(`biodata-p${p}.png`)) {
-          const { data } = supabase.storage.from(BUCKET).getPublicUrl(`biodata-p${p}.png`);
+      PAGE_NUMBERS.forEach(p => {
+        const file = templateImageName(form, p);
+        if (names.has(file)) {
+          const { data } = supabase.storage.from(BUCKET).getPublicUrl(file);
           imgs[p] = data.publicUrl;
         }
       });
@@ -470,7 +276,7 @@ export default function PdfMapper() {
       setLoadingStorage(false);
     };
     loadFromStorage();
-  }, []);
+  }, [form, PAGE_NUMBERS]);
 
   // ── Load field mappings from Supabase ────────────────────────────────────────
   useEffect(() => {
@@ -490,13 +296,13 @@ export default function PdfMapper() {
 
         // Carry retired ids onto their replacement, then drop them from view
         let carried = 0;
-        Object.entries(RETIRED_FIELD_IDS).forEach(([oldId, newId]) => {
+        Object.entries(form.retired).forEach(([oldId, newId]) => {
           const legacy = map[oldId];
           if (!legacy) return;
           delete map[oldId];
           if (map[newId]) return;            // already placed — keep what is there
           const def  = FIELD_LOOKUP[newId];
-          const dims = getDefaultDims(newId);
+          const dims = dimsFor(newId);
           map[newId] = {
             ...legacy,
             field_id: newId,
@@ -513,7 +319,7 @@ export default function PdfMapper() {
           : `Loaded ${Object.keys(map).length} saved mappings`);
       }
     })();
-  }, []);
+  }, [form, FIELD_LOOKUP, dimsFor]);
 
   // ── Handle PDF / image upload → render → save to Storage ─────────────────────
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -527,7 +333,7 @@ export default function PdfMapper() {
       showMsg("Rendering PDF pages…");
       let dataUrls: Record<number, string> = {};
       try {
-        dataUrls = await pdfToDataUrls(file);
+        dataUrls = await pdfToDataUrls(file, form.pages);
         // Show rendered images immediately while uploading
         setPageImages(prev => ({ ...prev, ...dataUrls }));
         setImgFailed({});
@@ -545,7 +351,7 @@ export default function PdfMapper() {
       let failed = false;
       for (const [pageStr, dataUrl] of Object.entries(dataUrls)) {
         const page = Number(pageStr);
-        const url  = await uploadPageToStorage(dataUrl, page);
+        const url  = await uploadPageToStorage(dataUrl, form, page);
         if (url) {
           storageUrls[page] = url;
         } else {
@@ -556,7 +362,7 @@ export default function PdfMapper() {
 
       if (!failed) {
         setPageImages(prev => ({ ...prev, ...storageUrls }));
-        resetBiodataPdfCache();  // exports must pick up the new template
+        resetPdfTemplateCache();  // exports must pick up the new template
         showMsg(`✓ PDF saved to Storage — ${Object.keys(storageUrls).length} pages ready for all recruiters`);
       } else {
         showMsg("⚠️ PDF rendered locally but Storage upload failed. Check bucket exists and is public.");
@@ -573,12 +379,12 @@ export default function PdfMapper() {
 
         setUploadingStorage(true);
         showMsg(`Uploading page ${currentPage} to Storage…`);
-        const url = await uploadPageToStorage(dataUrl, currentPage);
+        const url = await uploadPageToStorage(dataUrl, form, currentPage);
         setUploadingStorage(false);
 
         if (url) {
           setPageImages(prev => ({ ...prev, [currentPage]: url }));
-          resetBiodataPdfCache();  // exports must pick up the new template
+          resetPdfTemplateCache();  // exports must pick up the new template
           showMsg(`✓ Page ${currentPage} saved to Storage`);
         } else {
           showMsg("⚠️ Image loaded locally but Storage upload failed. Check bucket exists and is public.");
@@ -597,7 +403,7 @@ export default function PdfMapper() {
     const pdfX = parseFloat(((e.clientX - rect.left) / rect.width  * PDF_W).toFixed(1));
     const pdfY = parseFloat(((e.clientY - rect.top)  / rect.height * PDF_H).toFixed(1));
     const def  = FIELD_LOOKUP[selectedId];
-    const dims = getDefaultDims(selectedId);
+    const dims = dimsFor(selectedId);
     setMappings(prev => ({
       ...prev,
       [selectedId]: {
@@ -614,7 +420,7 @@ export default function PdfMapper() {
     const next = ids.slice(idx + 1).find(fid => !mappings[fid] && fid !== selectedId);
     setSelectedId(next ?? null);
     if (next) setTimeout(() => fieldRefs.current[next]?.scrollIntoView({ behavior: "smooth", block: "nearest" }), 50);
-  }, [selectedId, currentPage, mappings]);
+  }, [selectedId, currentPage, mappings, SECTIONS, FIELD_LOOKUP, dimsFor, PDF_W, PDF_H]);
 
   // Keep mappingsRef in sync so drag callbacks always read the latest positions
   useEffect(() => { mappingsRef.current = mappings; }, [mappings]);
@@ -716,7 +522,7 @@ export default function PdfMapper() {
 
     document.addEventListener("mousemove", onMove);
     document.addEventListener("mouseup",   onUp);
-  }, []);
+  }, [PDF_W, PDF_H]);
 
   // ── Save mappings to Supabase ────────────────────────────────────────────────
   const handleSave = async () => {
@@ -756,7 +562,7 @@ export default function PdfMapper() {
         : `Error: ${error.message}`);
     } else {
       setSaveStatus("saved");
-      resetBiodataPdfCache();  // next biodata export picks up the new sizes/positions
+      resetPdfTemplateCache();  // next biodata export picks up the new sizes/positions
       showMsg(`✓ Saved ${rows.length} mappings`);
       setTimeout(() => setSaveStatus("idle"), 3000);
     }
@@ -900,13 +706,35 @@ export default function PdfMapper() {
   return (
     <div className="flex flex-col gap-4">
 
+      {/* ── Form picker ──────────────────────────────────────────────────────── */}
+      {/* Positions for every form share one table, so switching here only changes
+          which field set and which template are on screen. Nothing is lost. */}
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="inline-flex rounded-lg border border-slate-300 overflow-hidden">
+          {FORMS.map(f => (
+            <button
+              key={f.id}
+              onClick={() => { if (f.id !== formId) { setFormId(f.id); setCurrentPage(1); setSelectedId(null); } }}
+              className={`px-4 py-2 text-sm font-semibold transition-colors ${
+                f.id === formId
+                  ? "bg-slate-800 text-white"
+                  : "bg-white text-slate-500 hover:bg-slate-50"
+              }`}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+        {form.note && <span className="text-xs text-slate-400">{form.note}</span>}
+      </div>
+
       {/* ── Top bar ──────────────────────────────────────────────────────────── */}
       <div className="flex flex-wrap items-center gap-3 pb-4 border-b border-gray-200">
         <span className="text-xs px-2.5 py-1 bg-slate-100 rounded-full text-slate-600 font-medium">
           {mappedCount} / {totalFields} total
         </span>
         <span className="text-xs px-2.5 py-1 bg-blue-50 rounded-full text-blue-700 font-medium">
-          Page {currentPage}: {pageMapped} / {pageFields.length}
+          {form.id === "id407" ? "Sheet" : "Page"} {currentPage}: {pageMapped} / {pageFields.length}
         </span>
         {uploadingStorage && (
           <span className="text-xs px-2.5 py-1 bg-amber-50 rounded-full text-amber-700 font-medium animate-pulse">
@@ -957,11 +785,12 @@ export default function PdfMapper() {
 
           {/* Page toggle + zoom controls */}
           <div className="flex items-center gap-2">
-            {([1, 2] as const).map(p => (
+            {PAGE_NUMBERS.map(p => (
               <button key={p} onClick={() => { setCurrentPage(p); setSelectedId(null); }}
                 className={`px-4 py-1.5 text-sm font-medium rounded-lg transition-colors ${currentPage === p ? "bg-slate-800 text-white" : "bg-white text-slate-600 border border-slate-300 hover:bg-slate-50"}`}
               >
-                Page {p}
+                {/* ID 407 is a booklet: sheet 1 carries form pages 4 and 1 */}
+                {form.id === "id407" ? `Sheet ${p} (pages ${p === 1 ? "4 | 1" : "2 | 3"})` : `Page ${p}`}
                 {pageImages[p] && !imgFailed[p] && <span className="ml-1.5 w-1.5 h-1.5 bg-green-400 rounded-full inline-block" />}
               </button>
             ))}
