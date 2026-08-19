@@ -319,6 +319,10 @@ export async function exportBiodataPdf(applicant: ApplicantForExport): Promise<v
   await Promise.all(imageJobs);
 
   // 5. Stamp the rest and hand it over
-  stampFields(pages, mappings, values, font, BIODATA.height, defaultSize, sizeOverrides);
+  stampFields({
+    pages, mappings, values, font,
+    pageHeight: BIODATA.height, defaultSize, sizeOverrides,
+    keepUnitFields: new Set(BIODATA.unitFields ?? []),
+  });
   downloadPdf(await pdfDoc.save(), safeFilename(applicant.full_name, "Biodata"));
 }

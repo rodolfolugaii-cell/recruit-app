@@ -43,6 +43,12 @@ export interface FormDef {
   paragraphs: string[][];
   /** Field ids the form used to have, mapped to what replaced them. */
   retired: Record<string, string>;
+  /**
+   * Fields whose value ends in a unit that must survive truncation. A Height box
+   * printing "5.1 …" instead of "5.1 CM" loses the only part that says what the
+   * number means.
+   */
+  unitFields?: string[];
   /** Shown under the form picker. */
   note?: string;
 }
@@ -260,6 +266,7 @@ export const FORMS: FormDef[] = [
     sections: BIODATA_SECTIONS,
     paragraphs: BIODATA_PARAGRAPHS,
     retired: BIODATA_RETIRED_IDS,
+    unitFields: ["height", "weight"],
     note: "The agency's own applicant biodata, filled from the apply form.",
   },
   {

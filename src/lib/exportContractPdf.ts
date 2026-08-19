@@ -79,7 +79,11 @@ export async function exportContractPdf(
   );
 
   // 5. Stamp the rest and hand it over
-  stampFields(pages, mappings, values, font, ID407.height, defaultSize, sizeOverrides);
+  stampFields({
+    pages, mappings, values, font,
+    pageHeight: ID407.height, defaultSize, sizeOverrides,
+    keepUnitFields: new Set(ID407.unitFields ?? []),
+  });
 
   const who = [applicant.full_name, employer?.name].filter(Boolean).join(" - ");
   downloadPdf(await pdfDoc.save(), safeFilename(who, "ID 407 Contract"));
