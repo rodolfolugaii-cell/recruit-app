@@ -733,6 +733,24 @@ export default function PdfMapper() {
         {form.note && <span className="text-xs text-slate-400">{form.note}</span>}
       </div>
 
+      {form.generated ? (
+        <div className="p-8 rounded-xl border border-dashed border-gray-300 bg-white">
+          <p className="text-3xl mb-3">🧾</p>
+          <h3 className="font-semibold text-gray-800">Nothing to map on this one</h3>
+          <p className="mt-2 text-sm text-gray-500 max-w-xl leading-relaxed">
+            The General Biodata is drawn by the app rather than printed over a scanned
+            form, so there is no template to upload and no field to position. Its layout
+            flows to fit whatever the applicant filled in, and grows onto a second page
+            when her work history needs one.
+          </p>
+          <p className="mt-3 text-sm text-gray-500 max-w-xl leading-relaxed">
+            Download it from <span className="font-medium text-gray-700">For Review</span> →
+            open an applicant → <span className="font-medium text-gray-700">📄 General Biodata</span>.
+            It carries the same details as the agency biodata, with no agency name on it.
+          </p>
+        </div>
+      ) : (
+      <>
       {/* ── Top bar ──────────────────────────────────────────────────────────── */}
       <div className="flex flex-wrap items-center gap-3 pb-4 border-b border-gray-200">
         <span className="text-xs px-2.5 py-1 bg-slate-100 rounded-full text-slate-600 font-medium">
@@ -1201,6 +1219,8 @@ export default function PdfMapper() {
           })}
         </div>
       </div>
+      </>
+      )}
     </div>
   );
 }

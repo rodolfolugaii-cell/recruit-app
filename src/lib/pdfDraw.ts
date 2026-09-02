@@ -64,6 +64,35 @@ export function sizeFor(m: FieldMapping, defaultSize: number): number {
 }
 
 /**
+ * Drop anything the font cannot draw.
+ *
+ * The standard PDF fonts are WinAnsi-only and pdf-lib THROWS on the first
+ * character outside it, which would fail the whole download rather than one
+ * field — a location typed as "Kowloon Tong 九龍塘", a name with a curly
+ * apostrophe, an address pasted from a web page. The Latin part is what these
+ * forms are read in, so unsupported characters are dropped and the rest kept.
+ *
+ * The fast path is the common one: try the whole string, and only fall back to
+ * filtering character by character when something in it fails. A value that is
+ * entirely non-Latin comes out empty — drawing it would need an embedded CJK
+ * font, which these forms do not carry.
+ */
+export function encodable(text: string, font: PDFFont): string {
+  if (!text) return "";
+  try {
+    font.widthOfTextAtSize(text, 12);
+    return text;
+  } catch {
+    // fall through and salvage what we can
+  }
+  let out = "";
+  for (const ch of text) {
+    try { font.widthOfTextAtSize(ch, 12); out += ch; } catch { /* not drawable */ }
+  }
+  return out.replace(/\s{2,}/g, " ").trim();
+}
+
+/**
  * Shrink `text` with a trailing ellipsis until it fits `maxW` at `size`.
  * Uses real glyph widths rather than a character-count estimate, so truncation
  * stays correct at any font size.
@@ -73,8 +102,10 @@ export function sizeFor(m: FieldMapping, defaultSize: number): number {
  * ruled line and into the neighbouring answer, the ellipsis is dropped and the
  * text simply clipped, down to nothing if the box is that small.
  */
-export function fitText(text: string, font: PDFFont, size: number, maxW: number): string {
+export function fitText(raw: string, font: PDFFont, size: number, maxW: number): string {
   if (maxW <= 0) return "";
+  const text = encodable(raw, font);
+  if (!text) return "";
   if (font.widthOfTextAtSize(text, size) <= maxW) return text;
   let t = text;
   while (t.length > 1 && font.widthOfTextAtSize(`${t}…`, size) > maxW) {
@@ -84,6 +115,38 @@ export function fitText(text: string, font: PDFFont, size: number, maxW: number)
   return font.widthOfTextAtSize(marked, size) <= maxW
     ? marked
     : clipToWidth(text, font, size, maxW);
+}
+
+/**
+ * Greedy word-wrap into as many lines as it takes, for a generated page where
+ * the column has a width but no fixed number of lines.
+ *
+ * wrapAcross() is the counterpart for a scanned form, where the ruled lines are
+ * already printed and there is a hard limit on how many exist.
+ */
+export function wrapLines(
+  text: string,
+  font: PDFFont,
+  size: number,
+  maxW: number,
+): string[] {
+  const words = encodable(text, font).split(/\s+/).filter(Boolean);
+  if (!words.length || maxW <= 0) return [];
+
+  const out: string[] = [];
+  let line = "";
+  for (const word of words) {
+    const next = line ? `${line} ${word}` : word;
+    if (font.widthOfTextAtSize(next, size) <= maxW) { line = next; continue; }
+    if (line) out.push(line);
+    // A single word wider than the column has nowhere to break, so clip it
+    // rather than let it run into the neighbouring column.
+    line = font.widthOfTextAtSize(word, size) > maxW
+      ? clipToWidth(word, font, size, maxW)
+      : word;
+  }
+  if (line) out.push(line);
+  return out;
 }
 
 /**
@@ -168,7 +231,7 @@ export function flowParagraphs(
 
     // Uppercased here because the stamp loop uppercases too — measuring the
     // original would under-read the width and let capitals overflow.
-    const upper = text.toUpperCase();
+    const upper = encodable(text.toUpperCase(), font);
     const start = Math.min(...placed.map(({ m }) => sizeFor(m, defaultSize)));
 
     let size   = start;
@@ -216,13 +279,15 @@ function clipToWidth(text: string, font: PDFFont, size: number, maxW: number): s
  * `keepSuffix` marks a value whose last space-separated token must survive.
  */
 export function fitValue(
-  text: string,
+  raw: string,
   font: PDFFont,
   size: number,
   maxW: number,
   keepSuffix = false,
 ): { text: string; size: number } {
   if (maxW <= 0) return { text: "", size };
+  const text = encodable(raw, font);
+  if (!text) return { text: "", size };
 
   let s = size;
   while (font.widthOfTextAtSize(text, s) > maxW && s > MIN_TEXT_SIZE) {
@@ -367,6 +432,7 @@ export function stampFields(opts: {
         value.toUpperCase(), font, configured, m.w - 2,
         keepUnitFields.has(m.field_id),
       );
+      if (!fitted.text) continue;
       page.drawText(fitted.text, {
         x: m.x + 1,
         y: toLibY(m, pageHeight) + 2,   // 2pt padding from the bottom of the zone

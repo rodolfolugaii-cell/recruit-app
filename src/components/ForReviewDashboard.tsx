@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { supabase } from "@/lib/supabase";
 import { exportBiodataPdf, type ApplicantForExport } from "@/lib/exportBiodataPdf";
+import { exportGenericBiodataPdf } from "@/lib/exportGenericBiodataPdf";
 import {
   TrashDropZone, DeleteConfirmDialog, UndoToast,
   isPointOverTrash, DELETED_STATUS,
@@ -215,6 +216,7 @@ export default function ForReviewDashboard() {
   const [selectedApplicant, setSelected] = useState<Applicant | null>(null);
   const [movingBackId, setMovingBackId]  = useState<string | null>(null);
   const [exporting, setExporting]        = useState(false);
+  const [exportingGeneral, setExportingGeneral] = useState(false);
   const [pressingId, setPressingId]      = useState<string | null>(null);
   const [dragState, setDragState]        = useState<DragState | null>(null);
   const [sortedIds, setSortedIds]        = useState<string[]>([]);
@@ -405,6 +407,21 @@ Both links, the terms and the witnesses are on the Contracts page.`
       alert("Export failed: " + (err?.message ?? "Unknown error"));
     } finally {
       setExporting(false);
+    }
+  }, [selectedApplicant]);
+
+  /* ── Export the unbranded biodata ── */
+  // Drawn from scratch rather than stamped onto the agency's scanned form, so it
+  // carries no agency name and needs no template or field positions.
+  const handleExportGeneral = useCallback(async () => {
+    if (!selectedApplicant) return;
+    setExportingGeneral(true);
+    try {
+      await exportGenericBiodataPdf(selectedApplicant as ApplicantForExport);
+    } catch (err) {
+      alert("Export failed: " + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setExportingGeneral(false);
     }
   }, [selectedApplicant]);
 
@@ -1105,6 +1122,21 @@ Both links, the terms and the witnesses are on the Contracts page.`
                     </>
                   ) : (
                     "📄 Export Biodata PDF"
+                  )}
+                </button>
+                <button
+                  onClick={handleExportGeneral}
+                  disabled={exportingGeneral}
+                  title="A plain biodata with the same details and no agency name on it"
+                  className="flex items-center gap-2 bg-white text-slate-700 border border-slate-300 px-5 py-2.5 rounded-lg text-sm font-medium hover:bg-slate-50 transition-colors disabled:opacity-50"
+                >
+                  {exportingGeneral ? (
+                    <>
+                      <span className="w-4 h-4 border-2 border-slate-300 border-t-slate-600 rounded-full animate-spin inline-block" />
+                      Generating…
+                    </>
+                  ) : (
+                    "📄 General Biodata"
                   )}
                 </button>
                 <button

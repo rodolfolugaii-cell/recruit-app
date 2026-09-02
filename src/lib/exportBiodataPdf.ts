@@ -64,6 +64,7 @@ export interface ApplicantForExport {
   mobile:        string;
   photo_url:     string;
   signature_url?: string | null;
+  signed_at?:     string | null;
   form_data: {
     placeOfBirth?:      string;
     currentLocation?:   string;
