@@ -324,6 +324,7 @@ export async function exportBiodataPdf(applicant: ApplicantForExport): Promise<v
     pages, mappings, values, font,
     pageHeight: BIODATA.height, defaultSize, sizeOverrides,
     keepUnitFields: new Set(BIODATA.unitFields ?? []),
+    leftAlignFields: new Set(BIODATA.paragraphs.flat()),
   });
   downloadPdf(await pdfDoc.save(), safeFilename(applicant.full_name, "Biodata"));
 }

@@ -442,6 +442,13 @@ export function drawImageCover(
  *
  * Images and signatures are handled by the caller before this runs, so anything
  * of those types is skipped here.
+ *
+ * Text is CENTRED in its box: a mapped zone is positioned over a blank on the
+ * scanned form, and an answer reads as belonging to that blank when it sits in
+ * the middle of it and grows evenly both ways, rather than clinging to the left
+ * edge and trailing off. `leftAlignFields` opts out the boxes that carry the
+ * continuation lines of one flowed paragraph, where a shared left edge is what
+ * makes the lines read as a single run of prose.
  */
 export function stampFields(opts: {
   pages:    PDFPage[];
@@ -453,9 +460,12 @@ export function stampFields(opts: {
   sizeOverrides: Map<string, number>;
   /** Fields whose trailing unit must never be truncated away. */
   keepUnitFields?: Set<string>;
+  /** Fields flowed across several boxes, which stay left-aligned as one paragraph. */
+  leftAlignFields?: Set<string>;
 }): void {
   const { pages, mappings, values, font, pageHeight, defaultSize, sizeOverrides } = opts;
-  const keepUnitFields = opts.keepUnitFields ?? new Set<string>();
+  const keepUnitFields  = opts.keepUnitFields  ?? new Set<string>();
+  const leftAlignFields = opts.leftAlignFields ?? new Set<string>();
 
   for (const m of mappings) {
     if (m.field_type === "image" || m.field_type === "signature") continue;
@@ -478,8 +488,13 @@ export function stampFields(opts: {
         keepUnitFields.has(m.field_id),
       );
       if (!fitted.text) continue;
+      // fitValue already shrank the text to m.w - 2, so half the slack is at
+      // worst 1pt a side and the value can never be centred out of its box.
+      const textW = font.widthOfTextAtSize(fitted.text, fitted.size);
       page.drawText(fitted.text, {
-        x: m.x + 1,
+        x: leftAlignFields.has(m.field_id)
+          ? m.x + 1
+          : m.x + (m.w - textW) / 2,
         y: toLibY(m, pageHeight) + 2,   // 2pt padding from the bottom of the zone
         size: fitted.size, font, color: BLACK,
       });

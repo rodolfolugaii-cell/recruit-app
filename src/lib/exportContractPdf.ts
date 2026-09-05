@@ -83,6 +83,7 @@ export async function exportContractPdf(
     pages, mappings, values, font,
     pageHeight: ID407.height, defaultSize, sizeOverrides,
     keepUnitFields: new Set(ID407.unitFields ?? []),
+    leftAlignFields: new Set(ID407.paragraphs.flat()),
   });
 
   const who = [applicant.full_name, employer?.name].filter(Boolean).join(" - ");

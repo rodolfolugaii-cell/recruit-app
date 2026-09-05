@@ -527,6 +527,54 @@ export default function PdfMapper() {
     document.addEventListener("mouseup",   onUp);
   }, [PDF_W, PDF_H]);
 
+  // ── Nudge the selected marker with the arrow keys ────────────────────────────
+  // Dragging can only ever be as precise as the zoom allows: at 100% one screen
+  // pixel is more than a PDF point, so a box cannot be landed exactly on a ruled
+  // line by hand. The arrows step in real points instead, which makes placement
+  // exact and repeatable whatever the zoom happens to be.
+  useEffect(() => {
+    const DIRS: Record<string, [number, number]> = {
+      ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1],
+    };
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      const dir = DIRS[e.key];
+      if (!dir) return;
+      if (e.altKey) return;          // leave the browser's own alt+arrow alone
+
+      // Never steal the arrows from someone typing in the sidebar
+      const el = document.activeElement as HTMLElement | null;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" ||
+                 el.tagName === "SELECT" || el.isContentEditable)) return;
+
+      if (!selectedId) return;
+      const current = mappingsRef.current[selectedId];
+      // A field that is selected but not yet placed has nothing to nudge, and a
+      // box on another page would move invisibly
+      if (!current || current.page !== currentPage) return;
+
+      // Shift for coarse, ctrl/cmd for the finest step the stored 0.1pt allows
+      const step = e.shiftKey ? 10 : (e.ctrlKey || e.metaKey) ? 0.1 : 1;
+      e.preventDefault();            // stop the page scrolling under the mapper
+
+      setMappings(prev => {
+        const m = prev[selectedId];
+        if (!m) return prev;
+        return {
+          ...prev,
+          [selectedId]: {
+            ...m,
+            x: parseFloat(Math.max(0, Math.min(PDF_W, m.x + dir[0] * step)).toFixed(1)),
+            y: parseFloat(Math.max(0, Math.min(PDF_H, m.y + dir[1] * step)).toFixed(1)),
+          },
+        };
+      });
+    };
+
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [selectedId, currentPage, PDF_W, PDF_H]);
+
   // ── Save mappings to Supabase ────────────────────────────────────────────────
   const handleSave = async () => {
     const rows = Object.values(mappings).filter(m => m.field_id !== SETTINGS_ROW_ID);
@@ -855,9 +903,16 @@ export default function PdfMapper() {
             </div>
           </div>
 
-          {/* Placement hint */}
+          {/* Placement hint — the nudge keys only show once there is a placed
+              box for them to act on, so the line never advertises a dead key */}
           <p className="text-xs text-slate-400 italic -mt-1">
-            {renderingPdf ? "Rendering PDF…" : uploadingStorage ? "Saving to Storage…" : selectedId ? `▸ Placing: ${FIELD_LOOKUP[selectedId]?.label ?? selectedId}` : "Click a field on the right to start placing"}
+            {renderingPdf ? "Rendering PDF…" : uploadingStorage ? "Saving to Storage…" : selectedId ? (
+              <>
+                {`▸ Placing: ${FIELD_LOOKUP[selectedId]?.label ?? selectedId}`}
+                {mappings[selectedId] && mappings[selectedId].page === currentPage &&
+                  " — arrow keys nudge 1pt · shift 10pt · ctrl 0.1pt"}
+              </>
+            ) : "Click a field on the right to start placing"}
           </p>
 
           {/* PDF image + overlay
@@ -931,7 +986,7 @@ export default function PdfMapper() {
                           setSelectedId(m.field_id);
                           fieldRefs.current[m.field_id]?.scrollIntoView({ behavior: "smooth", block: "nearest" });
                         }}
-                        className={`absolute border-2 flex ${isCb ? "items-center justify-center" : "items-end justify-start overflow-hidden"} ${bg} ${border} ${isSel ? "ring-2 ring-yellow-400 ring-offset-1 z-10" : ""}`}
+                        className={`absolute border-2 flex ${isCb ? "items-center justify-center" : "items-end justify-center overflow-hidden"} ${bg} ${border} ${isSel ? "ring-2 ring-yellow-400 ring-offset-1 z-10" : ""}`}
                         style={{
                           left: `${(m.x / PDF_W) * 100}%`,
                           top:  `${(m.y / PDF_H) * 100}%`,
@@ -968,9 +1023,9 @@ export default function PdfMapper() {
                           </svg>
                         )}
 
-                        {/* Sample text at the field's real size — sits on the same
-                            baseline the exporter uses (1pt left / 2pt bottom padding),
-                            so what you see here is what prints. */}
+                        {/* Sample text at the field's real size — centred on the same
+                            baseline the exporter uses (2pt bottom padding), so what you
+                            see here is what prints. */}
                         {isTxt && showTextPreview && pxPerPt > 0 && (
                           <span style={{
                             fontSize:   `${effSize(m) * pxPerPt}px`,
@@ -978,7 +1033,6 @@ export default function PdfMapper() {
                             lineHeight: 1,
                             whiteSpace: "nowrap",
                             color: "rgba(15,23,42,0.8)",
-                            paddingLeft:   `${1 * pxPerPt}px`,
                             paddingBottom: `${2 * pxPerPt}px`,
                             pointerEvents: "none", userSelect: "none",
                           }}>{m.label}</span>
