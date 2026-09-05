@@ -23,7 +23,9 @@
  */
 
 import { PDFDocument, PDFFont, PDFPage, StandardFonts, rgb } from "pdf-lib";
-import { downloadPdf, encodable, fitValue, safeFilename, wrapLines } from "./pdfDraw";
+import {
+  downloadPdf, drawImageCover, encodable, fitValue, safeFilename, wrapLines,
+} from "./pdfDraw";
 import { ageFrom, formDate } from "./formDates";
 import { kidsOf } from "./kids";
 import type { ApplicantForExport, WEEntry } from "./exportBiodataPdf";
@@ -253,10 +255,10 @@ async function drawHeader(s: Sheet, ap: ApplicantForExport) {
         const img   = ct.includes("png")
           ? await s.doc.embedPng(bytes)
           : await s.doc.embedJpg(bytes);
-        // Inset by the border so the frame stays visible around the photo
-        s.page.drawImage(img, {
-          x: boxX + 1.5, y: boxY + 1.5, width: boxW - 3, height: boxH - 3,
-        });
+        // Inset by the border so the frame stays visible around the photo.
+        // Cover, not stretch: a portrait photo forced to this landscape box
+        // would come out visibly squashed.
+        drawImageCover(s.page, img, boxX + 1.5, boxY + 1.5, boxW - 3, boxH - 3);
         drewPhoto = true;
       }
     } catch {

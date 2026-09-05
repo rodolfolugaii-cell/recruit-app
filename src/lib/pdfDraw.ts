@@ -12,7 +12,10 @@
  * single place that flip happens.
  */
 
-import { PDFDocument, PDFFont, PDFPage, rgb, LineCapStyle } from "pdf-lib";
+import {
+  PDFDocument, PDFFont, PDFImage, PDFPage, rgb, LineCapStyle,
+  pushGraphicsState, popGraphicsState, rectangle, clip, endPath,
+} from "pdf-lib";
 
 /* ── Checkbox geometry ────────────────────────────────────────────────────── */
 // PDF Mapper draws every checkbox marker as a fixed CHECKBOX_SIZE square anchored
@@ -352,7 +355,8 @@ export function drawTick(page: PDFPage, m: FieldMapping, pageHeight: number): vo
  *
  * `contain` preserves the aspect ratio and centres what is left over, which is
  * what keeps a signature from looking squashed — the pad exports a transparent
- * PNG cropped to the ink, so its shape carries meaning. Photos fill their box.
+ * PNG cropped to the ink, so its shape carries meaning. Photos cover their box,
+ * cropped rather than squashed.
  *
  * A failure here is swallowed on purpose: a missing photo should leave the box
  * blank, not abandon a contract the rest of which is correct.
@@ -376,7 +380,7 @@ export async function drawImageField(
 
     const libY = toLibY(m, pageHeight);
     if (mode === "fill") {
-      page.drawImage(img, { x: m.x, y: libY, width: m.w, height: m.h });
+      drawImageCover(page, img, m.x, libY, m.w, m.h);
       return;
     }
     const scale = Math.min(m.w / img.width, m.h / img.height);
@@ -390,6 +394,47 @@ export async function drawImageField(
   } catch {
     // Leave the box blank and keep going
   }
+}
+
+/**
+ * Draw an image so it COVERS the box: scaled up until neither side leaves a
+ * gap, centred, with whatever overflows the box clipped away.
+ *
+ * An applicant photo is nearly always portrait while the frame it lands in is
+ * not, so scaling each axis independently to the box — the obvious thing — is
+ * exactly what squashes a face sideways. Here a single scale factor keeps the
+ * aspect ratio and a clipping rectangle hides the overflow, which is how a
+ * passport photo is cropped anyway.
+ *
+ * The clip is pushed as raw operators because pdf-lib has no API for it: save
+ * the graphics state, install the rectangle as the clip path, draw, restore.
+ * Without the restore every later drawing on the page would stay clipped to
+ * this box.
+ */
+export function drawImageCover(
+  page: PDFPage,
+  img: PDFImage,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+): void {
+  const scale = Math.max(w / img.width, h / img.height);
+  const dw = img.width * scale;
+  const dh = img.height * scale;
+
+  page.pushOperators(
+    pushGraphicsState(),
+    rectangle(x, y, w, h),
+    clip(),
+    endPath(),
+  );
+  page.drawImage(img, {
+    x: x + (w - dw) / 2,
+    y: y + (h - dh) / 2,
+    width: dw, height: dh,
+  });
+  page.pushOperators(popGraphicsState());
 }
 
 /**
