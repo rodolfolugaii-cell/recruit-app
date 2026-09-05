@@ -75,6 +75,12 @@ export interface ContractTerms {
   dutiesOthers?:    string;   // Schedule 5.6, prints over 4 ruled lines
 }
 
+/** field_id -> the text (or tick) to print instead of the computed value. */
+export type FieldOverrides = Record<string, string | boolean>;
+
+/** field_id -> where to print it, in PDF points with a top-left origin. */
+export type FieldPositions = Record<string, { x: number; y: number }>;
+
 export interface Contract {
   id:           string;
   created_at:   string;
@@ -99,6 +105,12 @@ export interface Contract {
   employer_witness_signature: string | null;
   helper_witness_name:        string | null;
   helper_witness_signature:   string | null;
+
+  // Hand corrections to this contract's printed sheet. An absent key means "use
+  // the computed value / the shared mapping", so clearing an edit restores the
+  // automatic behaviour rather than printing blank. See the migration.
+  field_overrides: FieldOverrides | null;
+  field_positions: FieldPositions | null;
 }
 
 /** What the public signing page is allowed to see. Mirrors contract_by_token(). */
@@ -178,6 +190,48 @@ export async function updateContract(id: string, patch: Partial<Contract>): Prom
     .single();
   if (error) throw new Error(contractSetupHint(error.message) ?? error.message);
   return data as Contract;
+}
+
+/**
+ * The contract belonging to one applicant, or null if none has been started.
+ *
+ * An applicant can in principle accumulate more than one over time (a placement
+ * that fell through, then a second employer), so the newest wins — that is the
+ * one a recruiter opening the profile means.
+ */
+export async function fetchContractForApplicant(applicantId: string): Promise<Contract | null> {
+  const { data, error } = await supabase
+    .from("contracts")
+    .select("*")
+    .eq("applicant_id", applicantId)
+    .order("created_at", { ascending: false })
+    .limit(1);
+  if (error) throw new Error(contractSetupHint(error.message) ?? error.message);
+  return (data?.[0] as Contract | undefined) ?? null;
+}
+
+/**
+ * Save the hand corrections for one contract's printed sheet.
+ *
+ * Both maps are written whole rather than merged in SQL: the editor already
+ * holds the complete set, and a partial merge would make clearing an override
+ * impossible to express.
+ */
+export async function saveContractFieldEdits(
+  id: string,
+  overrides: FieldOverrides,
+  positions: FieldPositions,
+): Promise<Contract> {
+  return updateContract(id, {
+    field_overrides: overrides,
+    field_positions: positions,
+  });
+}
+
+/** True when the columns from the field-edits migration are missing. */
+export function needsFieldEditsMigration(message: string): boolean {
+  return /field_overrides|field_positions/i.test(message)
+      && /does not exist|schema cache|column/i.test(message);
 }
 
 /* ── Public side (anon, token only) ───────────────────────────────────────── */

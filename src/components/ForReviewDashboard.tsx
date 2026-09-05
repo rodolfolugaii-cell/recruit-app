@@ -13,7 +13,11 @@ import ApplicantEditForm, { type EditableApplicant } from "@/components/Applican
 import ZodiacPanel from "@/components/ZodiacPanel";
 import { kidsOf } from "@/lib/kids";
 import { EmployerBadge, EmployerPicker, useEmployerDirectory } from "@/components/EmployerAssign";
-import { createContract, placeOfOriginFor, signingLink } from "@/lib/contracts";
+import {
+  createContract, fetchContractForApplicant, placeOfOriginFor, signingLink,
+  type Contract,
+} from "@/lib/contracts";
+import ContractSheetEditor from "@/components/ContractSheetEditor";
 
 interface WorkExperienceEntry {
   yearsOfEmployment: string; dateFrom: string; dateTo: string;
@@ -224,6 +228,14 @@ export default function ForReviewDashboard() {
   /* ── Inline biodata editing ── */
   const [editing, setEditing] = useState(false);
 
+  /* ── Profile modal tabs ── */
+  // The contract sheet is a second view of the same applicant rather than a
+  // separate page, because the reason to open it is always "does this person's
+  // contract read right", which is a biodata question first.
+  const [profileTab, setProfileTab] = useState<"biodata" | "contract">("biodata");
+  const [contract, setContract]     = useState<Contract | null>(null);
+  const [contractLoaded, setContractLoaded] = useState(false);
+
   /* ── Trash ── */
   const [confirmDelete, setConfirmDelete] = useState<Applicant | null>(null);
   const [deleting, setDeleting]           = useState(false);
@@ -367,6 +379,39 @@ export default function ForReviewDashboard() {
   }, [selectedApplicant]);
 
   /* ── Start an ID 407 contract ── */
+  /* ── The open applicant's contract, for the ID 407 tab ── */
+  // Opening a profile is the one moment the tab and the contract should reset,
+  // so that happens here rather than in an effect — saving the biodata replaces
+  // selectedApplicant, and a reset keyed on that would throw a recruiter back
+  // to the biodata tab mid-edit.
+  const openProfile = useCallback((ap: Applicant) => {
+    setSelected(ap);
+    setProfileTab("biodata");
+    setContract(null);
+    setContractLoaded(false);
+  }, []);
+
+  // Fetched on open rather than with the list: most of a review session never
+  // reaches the contract, and one query per opened profile is cheaper than a
+  // join across every card.
+  const openId = selectedApplicant?.id;
+  useEffect(() => {
+    if (!openId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const found = await fetchContractForApplicant(openId);
+        if (!cancelled) setContract(found);
+      } catch {
+        // A missing contracts table is not a reason to fail opening a biodata;
+        // the tab explains itself when it is opened.
+      } finally {
+        if (!cancelled) setContractLoaded(true);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [openId]);
+
   // Only the details we already hold are seeded — the wage, the commencement
   // basis and the duties are commercial terms, set deliberately on the
   // Contracts page rather than guessed here.
@@ -379,6 +424,7 @@ export default function ForReviewDashboard() {
         placeOfOrigin: placeOfOriginFor(ap.nationality),
         contractDate:  new Date().toISOString().slice(0, 10),
       });
+      setContract(contract);
       const link = signingLink(contract.employer_token);
       try { await navigator.clipboard.writeText(link); } catch { /* insecure context */ }
       alert(
@@ -599,7 +645,7 @@ Both links, the terms and the witnesses are on the Contracts page.`
               <div
                 key={applicant.id}
                 ref={(el) => { el ? cardRefs.current.set(applicant.id, el) : cardRefs.current.delete(applicant.id); }}
-                onClick={() => { if (!wasDragging.current) setSelected(applicant); }}
+                onClick={() => { if (!wasDragging.current) openProfile(applicant); }}
                 style={{
                   transform:  isPressing ? "scale(0.88)" : "scale(1)",
                   transition: "transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.18s ease",
@@ -615,7 +661,7 @@ Both links, the terms and the witnesses are on the Contracts page.`
                   onPointerDown={(e) => handleCardPointerDown(e, applicant)}
                   onClick={(e) => {
                     e.stopPropagation();
-                    if (!wasDragging.current) setSelected(applicant);
+                    if (!wasDragging.current) openProfile(applicant);
                   }}
                   style={{
                     position:    "absolute",
@@ -694,7 +740,7 @@ Both links, the terms and the witnesses are on the Contracts page.`
                       {movingBackId === applicant.id ? "Moving…" : "Move Back"}
                     </button>
                     <button
-                      onClick={(e) => { e.stopPropagation(); setSelected(applicant); }}
+                      onClick={(e) => { e.stopPropagation(); openProfile(applicant); }}
                       className="text-xs text-blue-600 hover:text-blue-800 font-semibold whitespace-nowrap"
                     >
                       View
@@ -800,6 +846,31 @@ Both links, the terms and the witnesses are on the Contracts page.`
               >&times;</button>
             </div>
 
+            {/* ── Tabs — hidden while editing, which owns the whole modal ── */}
+            {!editing && (
+              <div className="px-3 pt-2 border-b border-gray-200 flex gap-1 bg-white">
+                {([
+                  ["biodata",  "Biodata"],
+                  ["contract", "ID 407 Contract"],
+                ] as const).map(([key, label]) => (
+                  <button
+                    key={key}
+                    onClick={() => setProfileTab(key)}
+                    className={`px-4 py-2 text-xs font-semibold rounded-t-lg border-b-2 -mb-px transition-colors ${
+                      profileTab === key
+                        ? "border-amber-500 text-gray-900 bg-white"
+                        : "border-transparent text-gray-400 hover:text-gray-700"
+                    }`}
+                  >
+                    {label}
+                    {key === "contract" && contractLoaded && !contract && (
+                      <span className="ml-1.5 text-[10px] font-normal text-amber-500">not started</span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            )}
+
             {/* ── Edit mode replaces the read-only biodata view ── */}
             {editing ? (
               <ApplicantEditForm
@@ -807,6 +878,25 @@ Both links, the terms and the witnesses are on the Contracts page.`
                 onCancel={() => setEditing(false)}
                 onSaved={handleApplicantSaved}
               />
+            ) : profileTab === "contract" ? (
+              !contractLoaded
+                ? <div className="p-10 text-center text-sm text-gray-400">Loading contract…</div>
+                : <ContractSheetEditor
+                    key={contract?.id ?? "no-contract"}
+                    applicant={{
+                      full_name:     selectedApplicant.full_name,
+                      nationality:   selectedApplicant.nationality,
+                      signature_url: selectedApplicant.signature_url,
+                    }}
+                    employer={selectedApplicant.employer_id
+                      ? employersById.get(selectedApplicant.employer_id) ?? null
+                      : null}
+                    contract={contract}
+                    onCreateContract={handleCreateContract}
+                    creating={creatingContract}
+                    canCreate={!!selectedApplicant.employer_id}
+                    onContractSaved={setContract}
+                  />
             ) : (
             /* Biodata on the left, zodiac / fortune panel on the right.
                Stacks vertically below lg so the modal still works on a tablet. */
@@ -1104,12 +1194,18 @@ Both links, the terms and the witnesses are on the Contracts page.`
                     {creatingContract ? "Creating…" : "📄 Create Contract"}
                   </button>
                 )}
+                {/* Biodata actions belong to the biodata tab — offering "Export
+                    Biodata PDF" while the contract sheet is on screen reads as
+                    the button that would print what you are looking at. */}
+                {profileTab === "biodata" && (
                 <button
                   onClick={() => setEditing(true)}
                   className="bg-white text-slate-700 border border-slate-300 px-5 py-2.5 rounded-lg text-sm font-medium hover:bg-slate-50 transition-colors"
                 >
                   ✏️ Edit
                 </button>
+                )}
+                {profileTab === "biodata" && (<>
                 <button
                   onClick={handleExportPdf}
                   disabled={exporting}
@@ -1139,6 +1235,7 @@ Both links, the terms and the witnesses are on the Contracts page.`
                     "📄 General Biodata"
                   )}
                 </button>
+                </>)}
                 <button
                   onClick={() => setSelected(null)}
                   className="bg-amber-500 text-white px-5 py-2.5 rounded-lg text-sm font-medium hover:bg-amber-600 transition-colors"

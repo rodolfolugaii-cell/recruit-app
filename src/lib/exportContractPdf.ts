@@ -43,7 +43,11 @@ export async function exportContractPdf(
       fetchTemplateImage(templateImageName(ID407, i + 1), ID407.label)),
   ]);
 
-  const mappings = mappingsForForm(rows, formFieldIds(ID407));
+  // Per-contract box moves win over the shared mapping. Applied here, before
+  // anything measures or stamps, so the whole pipeline sees one set of boxes.
+  const moved = contract.field_positions ?? {};
+  const mappings = mappingsForForm(rows, formFieldIds(ID407))
+    .map(m => (moved[m.field_id] ? { ...m, ...moved[m.field_id] } : m));
   if (!mappings.length) {
     throw new Error(
       "No ID 407 field positions have been set yet. Open PDF Mapper, switch the " +
@@ -64,7 +68,22 @@ export async function exportContractPdf(
   // 3. Values, then flow the free text over the ruled lines it was given
   const values: FieldValues = buildId407Values(applicant, employer, contract);
   const sizeOverrides = new Map<string, number>();
-  flowParagraphs(values, mappings, font, ID407.paragraphs, defaultSize, sizeOverrides);
+  const overrides = contract.field_overrides ?? {};
+
+  // Hand-editing any line of a paragraph takes the whole group out of the
+  // auto-flow. Re-wrapping around a typed line is the one thing that cannot
+  // work: the wrap decides where line 2 begins, so it would either overwrite
+  // what was typed or leave a stale remainder underneath it. Owning all the
+  // lines at once is the only behaviour that stays predictable.
+  const autoFlowed = ID407.paragraphs.filter(ids => !ids.some(id => id in overrides));
+  flowParagraphs(values, mappings, font, autoFlowed, defaultSize, sizeOverrides);
+  for (const ids of ID407.paragraphs) {
+    if (autoFlowed.includes(ids)) continue;
+    for (const id of ids) values[id] = overrides[id] ?? "";
+  }
+
+  // Everything else: a correction simply replaces the computed value
+  for (const [id, text] of Object.entries(overrides)) values[id] = text;
 
   // 4. Signatures — scaled to fit, never stretched, since the pad exports a
   //    transparent PNG cropped to the ink and its shape carries meaning.
