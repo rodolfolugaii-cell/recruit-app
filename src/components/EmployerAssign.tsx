@@ -12,7 +12,7 @@
  * helper's own details to the employer's residence, household and facilities.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { employerInitials, employerTint, fetchEmployers, type Employer } from "@/lib/employers";
 
@@ -44,7 +44,12 @@ export function useEmployerDirectory() {
     [employers],
   );
 
-  return { employers, byId, loading };
+  /** Fold a just-created employer in, so the picker names it without a refetch. */
+  const addEmployer = useCallback((e: Employer) => {
+    setEmployers(list => (list.some(x => x.id === e.id) ? list : [e, ...list]));
+  }, []);
+
+  return { employers, byId, loading, addEmployer };
 }
 
 /**
@@ -80,18 +85,26 @@ export function EmployerBadge({
  * separate save, because the only thing being edited is a single foreign key and
  * a half-made assignment has no meaning.
  */
+/** Sentinel option value — never a real employer id. */
+export const NEW_EMPLOYER = "__new__";
+
 export function EmployerPicker({
-  applicantId, value, employers, onAssigned,
+  applicantId, value, employers, onAssigned, onCreateFromSheet,
 }: {
   applicantId: string;
   value?: string | null;
   employers: Employer[];
   onAssigned: (employerId: string | null) => void;
+  /** Offered only when the caller can host the sheet the details are typed on. */
+  onCreateFromSheet?: () => void;
 }) {
   const [saving, setSaving] = useState(false);
   const [error, setError]   = useState<string | null>(null);
 
   const change = async (next: string) => {
+    // Not an assignment at all — it hands over to the contract sheet, where the
+    // employer is described before it exists
+    if (next === NEW_EMPLOYER) { onCreateFromSheet?.(); return; }
     const employerId = next || null;
     setSaving(true);
     setError(null);
@@ -123,12 +136,17 @@ export function EmployerPicker({
         >
           <option value="">— Unassigned —</option>
           {employers.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
+          {onCreateFromSheet && (
+            <option value={NEW_EMPLOYER}>+ New employer from this contract…</option>
+          )}
         </select>
         {saving && <span className="text-xs text-gray-400 flex-shrink-0">Saving…</span>}
       </div>
       {!employers.length && (
         <p className="mt-1 text-[11px] text-gray-400">
-          No employers yet — add one on the Employers page.
+          No employers yet — {onCreateFromSheet
+            ? "pick “New employer from this contract” above, or add one on the Employers page."
+            : "add one on the Employers page."}
         </p>
       )}
       {error && <p className="mt-1 text-[11px] text-red-600">{error}</p>}

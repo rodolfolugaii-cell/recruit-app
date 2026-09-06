@@ -18,6 +18,7 @@ import {
   type Contract,
 } from "@/lib/contracts";
 import ContractSheetEditor from "@/components/ContractSheetEditor";
+import type { Employer } from "@/lib/employers";
 
 interface WorkExperienceEntry {
   yearsOfEmployment: string; dateFrom: string; dateTo: string;
@@ -215,7 +216,7 @@ export default function ForReviewDashboard() {
   const [applicants, setApplicants]      = useState<Applicant[]>([]);
   const [loading, setLoading]            = useState(true);
   // Employer names for the card badges and the picker in the profile modal
-  const { employers, byId: employersById } = useEmployerDirectory();
+  const { employers, byId: employersById, addEmployer } = useEmployerDirectory();
   const [creatingContract, setCreatingContract] = useState(false);
   const [selectedApplicant, setSelected] = useState<Applicant | null>(null);
   const [movingBackId, setMovingBackId]  = useState<string | null>(null);
@@ -235,6 +236,9 @@ export default function ForReviewDashboard() {
   const [profileTab, setProfileTab] = useState<"biodata" | "contract">("biodata");
   const [contract, setContract]     = useState<Contract | null>(null);
   const [contractLoaded, setContractLoaded] = useState(false);
+  // Set from the employer dropdown: the sheet stands in for the employer form
+  // until the record it describes exists.
+  const [newEmployerMode, setNewEmployerMode] = useState(false);
 
   /* ── Trash ── */
   const [confirmDelete, setConfirmDelete] = useState<Applicant | null>(null);
@@ -389,6 +393,7 @@ export default function ForReviewDashboard() {
     setProfileTab("biodata");
     setContract(null);
     setContractLoaded(false);
+    setNewEmployerMode(false);
   }, []);
 
   // Fetched on open rather than with the list: most of a review session never
@@ -442,6 +447,37 @@ Both links, the terms and the witnesses are on the Contracts page.`
       setCreatingContract(false);
     }
   }, [selectedApplicant]);
+
+  /**
+   * The sheet has just described a new employer into existence.
+   *
+   * Assign it, refresh the directory so the dropdown knows the name, then start
+   * the contract — which is the whole point of having described it.
+   */
+  const handleEmployerCreated = useCallback(async (created: Employer) => {
+    const ap = selectedApplicant;
+    if (!ap) return;
+    try {
+      const { error } = await supabase
+        .from("applicants")
+        .update({ employer_id: created.id })
+        .eq("id", ap.id);
+      if (error) throw error;
+
+      handleEmployerAssigned(created.id);
+      addEmployer(created);
+      setNewEmployerMode(false);
+
+      const contract = await createContract(ap.id, created.id, {
+        placeOfOrigin: placeOfOriginFor(ap.nationality),
+        contractDate:  new Date().toISOString().slice(0, 10),
+      });
+      setContract(contract);
+    } catch (e) {
+      alert("The employer was saved, but the contract could not be started: "
+        + (e instanceof Error ? e.message : String(e)));
+    }
+  }, [selectedApplicant, handleEmployerAssigned, addEmployer]);
 
   /* ── Export filled biodata PDF ── */
   const handleExportPdf = useCallback(async () => {
@@ -835,6 +871,10 @@ Both links, the terms and the witnesses are on the Contracts page.`
                       value={selectedApplicant.employer_id}
                       employers={employers}
                       onAssigned={handleEmployerAssigned}
+                      onCreateFromSheet={() => {
+                        setProfileTab("contract");
+                        setNewEmployerMode(true);
+                      }}
                     />
                   </div>
                 </div>
@@ -896,6 +936,9 @@ Both links, the terms and the witnesses are on the Contracts page.`
                     creating={creatingContract}
                     canCreate={!!selectedApplicant.employer_id}
                     onContractSaved={setContract}
+                    newEmployerMode={newEmployerMode}
+                    onEmployerCreated={handleEmployerCreated}
+                    onCancelNewEmployer={() => setNewEmployerMode(false)}
                   />
             ) : (
             /* Biodata on the left, zodiac / fortune panel on the right.

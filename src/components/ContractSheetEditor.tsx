@@ -37,7 +37,11 @@ import {
   type Contract, type FieldOverrides, type FieldPositions,
 } from "@/lib/contracts";
 import { exportContractPdf } from "@/lib/exportContractPdf";
-import type { Employer } from "@/lib/employers";
+import {
+  EMPLOYER_FIELD_SET, EMPLOYER_CHECK_FIELDS, employerFromSheet,
+  employerSheetGaps, partnerOf,
+} from "@/lib/id407Employer";
+import { createEmployer, type Employer } from "@/lib/employers";
 
 const ID407  = getForm("id407");
 const PDF_W  = ID407.width;
@@ -73,6 +77,9 @@ export default function ContractSheetEditor({
   creating,
   canCreate,
   onContractSaved,
+  newEmployerMode,
+  onEmployerCreated,
+  onCancelNewEmployer,
 }: {
   applicant: ContractApplicant;
   employer: Employer | null;
@@ -82,6 +89,10 @@ export default function ContractSheetEditor({
   /** False until an employer is assigned — a contract needs one to be against. */
   canCreate: boolean;
   onContractSaved: (c: Contract) => void;
+  /** Describe a brand-new employer by typing onto the sheet itself. */
+  newEmployerMode: boolean;
+  onEmployerCreated: (e: Employer) => void;
+  onCancelNewEmployer: () => void;
 }) {
   const [mappings, setMappings] = useState<FieldMapping[]>([]);
   const [defaultSize, setDefaultSize] = useState(8);
@@ -99,6 +110,7 @@ export default function ContractSheetEditor({
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [creatingEmployer, setCreatingEmployer] = useState(false);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
@@ -170,8 +182,11 @@ export default function ContractSheetEditor({
     // A contract that does not exist yet still has a helper with a name, and
     // showing those boxes filled is the clearest possible prompt for the rest.
     const stub = { terms: {} } as Contract;
-    return buildId407Values(applicant, employer, contract ?? stub);
-  }, [applicant, employer, contract]);
+    // Describing a new employer starts from an empty household, not from
+    // whoever happened to be assigned before
+    const src = newEmployerMode ? null : employer;
+    return buildId407Values(applicant, src, contract ?? stub);
+  }, [applicant, employer, contract, newEmployerMode]);
 
   const valueOf = useCallback((id: string): string => {
     const v = overrides[id] ?? computed[id];
@@ -196,13 +211,38 @@ export default function ContractSheetEditor({
 
   /* ── Editing ─────────────────────────────────────────────────────────────── */
 
+  /**
+   * Whether this box accepts a value right now.
+   *
+   * Normally that means a contract exists to record the correction against.
+   * While describing a new employer there is no contract yet and the sheet is
+   * standing in for the employer form, so exactly the boxes that make up an
+   * employer profile open up and nothing else does — typing a wage into a
+   * record that has not been agreed would be inventing terms.
+   */
+  const canEdit = useCallback((id: string): boolean => (
+    newEmployerMode ? EMPLOYER_FIELD_SET.has(id) : !!contract
+  ), [newEmployerMode, contract]);
+
   const beginEdit = useCallback((id: string) => {
-    if (!contract) return;               // nothing to save an edit into yet
+    if (!canEdit(id)) return;
     if (move) return;                    // a move is in progress; finish it first
     setCtxMenu(null);
     setEditingId(id);
     setDraft(valueOf(id));
-  }, [contract, move, valueOf]);
+  }, [canEdit, move, valueOf]);
+
+  /** Tick one of a Yes/No or unit pair, clearing whichever it excludes. */
+  const toggleCheck = useCallback((id: string) => {
+    if (!canEdit(id)) return;
+    setOverrides(prev => {
+      const next = { ...prev, [id]: !(prev[id] === true) };
+      const other = partnerOf(id);
+      if (other && next[id] === true) next[other] = false;
+      return next;
+    });
+    setDirty(true);
+  }, [canEdit]);
 
   const commitEdit = useCallback(() => {
     if (!editingId) return;
@@ -374,6 +414,31 @@ export default function ContractSheetEditor({
     }
   }, [persist, applicant, employer]);
 
+  /**
+   * Save the household described on the sheet as a new employer.
+   *
+   * Only the employer is created here. Assigning it and opening the contract is
+   * the parent's business — it owns the applicant row — so this hands the saved
+   * record back rather than reaching across for the applicant id.
+   */
+  const createEmployerFromSheet = useCallback(async () => {
+    const gaps = employerSheetGaps(overrides);
+    if (gaps.length) {
+      setSaveError(`Still needed before this employer can be saved: ${gaps.join(", ")}.`);
+      return;
+    }
+    setCreatingEmployer(true);
+    setSaveError(null);
+    try {
+      const saved = await createEmployer(employerFromSheet(overrides));
+      onEmployerCreated(saved);
+    } catch (e) {
+      setSaveError(describeError(e));
+    } finally {
+      setCreatingEmployer(false);
+    }
+  }, [overrides, onEmployerCreated]);
+
   /* ── Render ──────────────────────────────────────────────────────────────── */
 
   if (loading) {
@@ -404,8 +469,36 @@ export default function ContractSheetEditor({
 
   return (
     <div className="p-4">
+      {/* ── Describing a new employer onto the sheet ── */}
+      {newEmployerMode && (
+        <div className="mb-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 flex items-center gap-3 flex-wrap">
+          <div className="min-w-0 flex-1">
+            <p className="text-sm font-medium text-blue-900">New employer — fill in the household on the sheet.</p>
+            <p className="text-xs text-blue-700 mt-0.5">
+              The employer’s name, residence, Schedule 2 household and Schedule 3
+              accommodation boxes are open below — click any one and type, or tick
+              the Yes/No marks. Everything else fills itself once the contract exists.
+            </p>
+          </div>
+          <button
+            onClick={onCancelNewEmployer}
+            disabled={creatingEmployer}
+            className="px-3 py-1.5 rounded-md bg-white border border-blue-300 text-blue-700 text-xs font-semibold hover:bg-blue-100 disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={createEmployerFromSheet}
+            disabled={creatingEmployer}
+            className="px-3 py-1.5 rounded-md bg-blue-600 text-white text-xs font-semibold hover:bg-blue-700 disabled:opacity-50 whitespace-nowrap"
+          >
+            {creatingEmployer ? "Creating…" : "Create employer & contract"}
+          </button>
+        </div>
+      )}
+
       {/* ── No contract yet: the sheet still shows, but nothing is editable ── */}
-      {!contract && (
+      {!contract && !newEmployerMode && (
         <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 flex items-center gap-3 flex-wrap">
           <div className="min-w-0 flex-1">
             <p className="text-sm font-medium text-amber-900">No contract yet for this applicant.</p>
@@ -476,9 +569,11 @@ export default function ContractSheetEditor({
         <p className="text-[11px] text-gray-400 italic">
           {move
             ? "Drag the box, or nudge with the arrow keys — 1pt · shift 10pt · ctrl 0.1pt"
-            : contract
-              ? "Left-click a box to edit · right-click for more"
-              : "Read-only until a contract is created"}
+            : newEmployerMode
+              ? "Blue boxes are the employer’s — click to type, or tick a Yes/No"
+              : contract
+                ? "Left-click a box to edit · right-click for more"
+                : "Read-only until a contract is created"}
         </p>
 
         <div className="ml-auto flex items-center gap-2">
@@ -555,13 +650,23 @@ export default function ContractSheetEditor({
           };
 
           if (type === "checkbox") {
+            const editable = canEdit(id) && EMPLOYER_CHECK_FIELDS.includes(id);
             return (
               <div
                 key={id}
-                title={`${FIELD_LABELS[id] ?? id} — set from the contract terms`}
-                style={style}
-                className={`flex items-center justify-center pointer-events-none ${
-                  showBoxes ? "border border-dashed border-gray-400/60 bg-gray-400/5" : ""
+                title={editable
+                  ? `${FIELD_LABELS[id] ?? id} — click to tick`
+                  : `${FIELD_LABELS[id] ?? id} — set from the contract terms`}
+                style={{ ...style, cursor: editable ? "pointer" : undefined }}
+                onMouseDown={editable ? (e => { e.stopPropagation(); toggleCheck(id); }) : undefined}
+                className={`flex items-center justify-center ${
+                  editable ? "" : "pointer-events-none"
+                } ${
+                  showBoxes
+                    ? editable
+                      ? "border border-dashed border-blue-500/60 bg-blue-500/[0.07] hover:bg-blue-200/60"
+                      : "border border-dashed border-gray-400/60 bg-gray-400/5"
+                    : ""
                 }`}
               >
                 {tickedOf(id) && (
@@ -596,7 +701,7 @@ export default function ContractSheetEditor({
           return (
             <div
               key={id}
-              style={{ ...style, cursor: contract ? (isMoving ? "grab" : "text") : "default" }}
+              style={{ ...style, cursor: canEdit(id) ? (isMoving ? "grab" : "text") : "default" }}
               title={`${FIELD_LABELS[id] ?? id}${edited ? " — edited" : ""}${nudged ? " — moved" : ""}`}
               onMouseDown={e => {
                 if (isMoving) { onMoveHandleDown(e); return; }
@@ -623,8 +728,10 @@ export default function ContractSheetEditor({
                         ? "border border-emerald-500/70 bg-emerald-100/50 hover:bg-emerald-200/70"
                         : "hover:bg-emerald-200/60")
                     : (showBoxes
-                        ? "border border-dashed border-blue-500/60 bg-blue-500/[0.07] hover:bg-blue-200/60 hover:border-blue-600"
-                        : "hover:bg-blue-100/50")
+                        ? (canEdit(id)
+                            ? "border border-dashed border-blue-500/60 bg-blue-500/[0.07] hover:bg-blue-200/60 hover:border-blue-600"
+                            : "border border-dashed border-gray-400/50 bg-gray-400/5")
+                        : (canEdit(id) ? "hover:bg-blue-100/50" : ""))
               }`}
             >
               <span

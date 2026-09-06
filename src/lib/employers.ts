@@ -127,6 +127,19 @@ export async function fetchEmployers(): Promise<Employer[]> {
 }
 
 /** Upload a banner or logo and return its public URL. */
+/** Insert a new employer and hand back the saved row. */
+export async function createEmployer(
+  employer: Omit<Employer, "id" | "created_at">,
+): Promise<Employer> {
+  const { data, error } = await supabase
+    .from("employers")
+    .insert(employer)
+    .select()
+    .single();
+  if (error) throw new Error(employerSetupHint(error.message) ?? error.message);
+  return data as Employer;
+}
+
 export async function uploadEmployerImage(file: File, kind: "banner" | "logo"): Promise<string> {
   const ext  = file.name.split(".").pop() ?? "png";
   const path = `employers/${kind}-${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
