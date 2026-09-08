@@ -13,6 +13,8 @@ import ApplicantEditForm, { type EditableApplicant } from "@/components/Applican
 import ZodiacPanel from "@/components/ZodiacPanel";
 import { kidsOf } from "@/lib/kids";
 import { EmployerBadge, EmployerPicker, useEmployerDirectory } from "@/components/EmployerAssign";
+import DocumentChecklist from "@/components/DocumentChecklist";
+import type { DocumentRecord } from "@/lib/helperDocuments";
 import {
   createContract, fetchContractForApplicant, placeOfOriginFor, signingLink,
   type Contract,
@@ -40,6 +42,8 @@ interface Applicant {
   status: string;
   /** The employer this helper is placed with — null until she is assigned. */
   employer_id?: string | null;
+  /** The six required copies, each holding when it was ticked off. */
+  documents?: DocumentRecord | null;
   form_data: {
     placeOfBirth?: string;       currentLocation?: string;
     height?: string;             weight?: string;
@@ -479,6 +483,14 @@ Both links, the terms and the witnesses are on the Contracts page.`
     }
   }, [selectedApplicant, handleEmployerAssigned, addEmployer]);
 
+  /* ── Required documents ── */
+  // DocumentChecklist has already written the change (and rolls itself back if
+  // the write fails), so this only mirrors it into the list and the open modal.
+  const handleDocumentsChanged = useCallback((id: string, docs: DocumentRecord) => {
+    setApplicants((list) => list.map((a) => (a.id === id ? { ...a, documents: docs } : a)));
+    setSelected((p) => (p?.id === id ? { ...p, documents: docs } : p));
+  }, []);
+
   /* ── Export filled biodata PDF ── */
   const handleExportPdf = useCallback(async () => {
     if (!selectedApplicant) return;
@@ -658,7 +670,7 @@ Both links, the terms and the witnesses are on the Contracts page.`
         </div>
       ) : (
         <div
-          className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6"
+          className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-6"
 
         >
           {displayedApplicants.map((applicant) => {
@@ -680,15 +692,18 @@ Both links, the terms and the witnesses are on the Contracts page.`
             return (
               <div
                 key={applicant.id}
-                ref={(el) => { el ? cardRefs.current.set(applicant.id, el) : cardRefs.current.delete(applicant.id); }}
-                onClick={() => { if (!wasDragging.current) openProfile(applicant); }}
+                className="flex items-stretch min-w-0"
                 style={{
                   transform:  isPressing ? "scale(0.88)" : "scale(1)",
-                  transition: "transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.18s ease",
+                  transition: "transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1)",
                   userSelect: "none",
-                  position:   "relative",
                 }}
-                className="bg-white rounded-xl border border-amber-200 shadow-sm overflow-hidden flex flex-col hover:shadow-md"
+              >
+              <div
+                ref={(el) => { el ? cardRefs.current.set(applicant.id, el) : cardRefs.current.delete(applicant.id); }}
+                onClick={() => { if (!wasDragging.current) openProfile(applicant); }}
+                style={{ position: "relative" }}
+                className="flex-1 min-w-0 bg-white rounded-xl border border-amber-200 shadow-sm overflow-hidden flex flex-col hover:shadow-md transition-shadow"
               >
                 {/* ── Invisible centre-zone drag overlay (60 % × 60 %, centred) ──
                     Only this region has touch-action:none — the card edges
@@ -783,6 +798,15 @@ Both links, the terms and the witnesses are on the Contracts page.`
                     </button>
                   </div>
                 </div>
+              </div>
+
+              {/* The second box: overlaps the card's right edge by a few pixels
+                  so the pair reads as one unit, and scales with the card. */}
+              <DocumentChecklist
+                applicantId={applicant.id}
+                documents={applicant.documents}
+                onChange={(docs) => handleDocumentsChanged(applicant.id, docs)}
+              />
               </div>
             );
           })}
