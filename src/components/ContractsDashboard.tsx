@@ -248,9 +248,9 @@ export default function ContractsDashboard() {
                     Terms
                   </button>
                   <button onClick={() => handleExport(c)} disabled={exporting === c.id}
-                    title="Download the filled ID 407"
+                    title="Values only, to print onto the real pre-printed ID 407. Print at actual size — any scaling moves every value off its line."
                     className="px-2.5 py-1 rounded-md text-xs font-semibold bg-slate-800 text-white hover:bg-slate-700 transition-colors disabled:opacity-50">
-                    {exporting === c.id ? "Building…" : "📄 ID 407"}
+                    {exporting === c.id ? "Building…" : "📄 Print Overlay"}
                   </button>
                 </div>
               </div>

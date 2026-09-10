@@ -36,7 +36,7 @@ import {
   saveContractFieldEdits, needsFieldEditsMigration,
   type Contract, type FieldOverrides, type FieldPositions,
 } from "@/lib/contracts";
-import { exportContractPdf } from "@/lib/exportContractPdf";
+import { exportContractPdf, type ContractExportOptions } from "@/lib/exportContractPdf";
 import {
   EMPLOYER_FIELD_SET, EMPLOYER_CHECK_FIELDS, employerFromSheet,
   employerSheetGaps, partnerOf,
@@ -109,7 +109,8 @@ export default function ContractSheetEditor({
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [exporting, setExporting] = useState(false);
+  // Which export is running, so only that button shows its spinner
+  const [exporting, setExporting] = useState<"overlay" | "proof" | null>(null);
   const [creatingEmployer, setCreatingEmployer] = useState(false);
 
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -400,17 +401,17 @@ export default function ContractSheetEditor({
    * contract row — exporting the stale prop would quietly print the version
    * before the change someone just made.
    */
-  const exportPdf = useCallback(async () => {
-    setExporting(true);
+  const exportPdf = useCallback(async (opts: ContractExportOptions = {}) => {
+    setExporting(opts.includeTemplate ? "proof" : "overlay");
     setSaveError(null);
     try {
       const fresh = await persist();
       if (!fresh) return;
-      await exportContractPdf(applicant, employer, fresh);
+      await exportContractPdf(applicant, employer, fresh, opts);
     } catch (e) {
       setSaveError(describeError(e));
     } finally {
-      setExporting(false);
+      setExporting(null);
     }
   }, [persist, applicant, employer]);
 
@@ -581,20 +582,28 @@ export default function ContractSheetEditor({
           {dirty && !saveError && <span className="text-[11px] text-amber-600">Unsaved changes</span>}
           <button
             onClick={save}
-            disabled={!contract || !dirty || saving || exporting}
+            disabled={!contract || !dirty || saving || !!exporting}
             className="px-3 py-1.5 rounded-md bg-white border border-gray-300 text-gray-700 text-xs font-semibold hover:bg-gray-50 disabled:opacity-40"
           >
             {saving ? "Saving…" : "Save changes"}
           </button>
           <button
-            onClick={exportPdf}
-            disabled={!contract || saving || exporting}
+            onClick={() => exportPdf({ includeTemplate: true })}
+            disabled={!contract || saving || !!exporting}
+            title="A proof on plain paper: the form with the values on it, for checking alignment before you print a real one"
+            className="px-3 py-1.5 rounded-md bg-white text-gray-700 border border-gray-300 text-xs font-semibold hover:bg-gray-50 disabled:opacity-40 whitespace-nowrap"
+          >
+            {exporting === "proof" ? "Generating…" : "🖨 Proof copy"}
+          </button>
+          <button
+            onClick={() => exportPdf()}
+            disabled={!contract || saving || !!exporting}
             title={dirty
-              ? "Saves your changes, then downloads the sheet"
-              : "Download this contract as a PDF"}
+              ? "Saves your changes, then downloads the values only, to print onto the real form"
+              : "Downloads the values only, to print onto the real form"}
             className="px-3 py-1.5 rounded-md bg-gray-900 text-white text-xs font-semibold hover:bg-gray-700 disabled:opacity-40 whitespace-nowrap"
           >
-            {exporting ? "Generating…" : "📄 Export ID 407 PDF"}
+            {exporting === "overlay" ? "Generating…" : "📄 Print Overlay"}
           </button>
         </div>
       </div>
