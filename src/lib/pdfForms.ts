@@ -17,6 +17,10 @@ import {
   ID988A_COMBS, ID988A_DEFAULT_POSITIONS, ID988A_PAGE_H, ID988A_PAGE_W,
   ID988A_PARAGRAPHS, ID988A_SECTIONS,
 } from "./id988a";
+import {
+  ID988B_DEFAULT_POSITIONS, ID988B_PAGE_H, ID988B_PAGE_W,
+  ID988B_PARAGRAPHS, ID988B_SECTIONS,
+} from "./id988b";
 import { isCombCellOf, type CombSpec } from "./pdfCombs";
 
 export type FieldType = "text" | "checkbox" | "date" | "image" | "signature";
@@ -332,6 +336,19 @@ FORMS.push({
   defaultPositions: ID988A_DEFAULT_POSITIONS,
   combs: ID988A_COMBS,
   note: "Sheet 1 is form pages 1 | 2, sheet 2 is pages 3 | 4. Positions are measured off the scan — nudge and Save All.",
+});
+
+FORMS.push({
+  id: "id988b",
+  label: "ID 988B Employer Form",
+  pages: 2,
+  width: ID988B_PAGE_W,
+  height: ID988B_PAGE_H,
+  sections: ID988B_SECTIONS,
+  paragraphs: ID988B_PARAGRAPHS,
+  retired: {},
+  defaultPositions: ID988B_DEFAULT_POSITIONS,
+  note: "Booklet imposition: sheet 1 is form pages 4 | 1, sheet 2 is pages 2 | 3. Page 4 is printed matter with nothing to fill in.",
 });
 
 export const DEFAULT_FORM_ID = "biodata";

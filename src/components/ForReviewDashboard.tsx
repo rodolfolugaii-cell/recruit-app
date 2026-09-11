@@ -24,6 +24,8 @@ import { buildId407Values } from "@/lib/id407";
 import { buildId988aValues } from "@/lib/id988a";
 import { exportContractPdf, type ContractExportOptions } from "@/lib/exportContractPdf";
 import { exportId988aPdf } from "@/lib/exportId988aPdf";
+import { buildId988bValues } from "@/lib/id988b";
+import { exportId988bPdf } from "@/lib/exportId988bPdf";
 import type { Employer } from "@/lib/employers";
 
 interface WorkExperienceEntry {
@@ -241,7 +243,8 @@ export default function ForReviewDashboard() {
   // The contract sheet is a second view of the same applicant rather than a
   // separate page, because the reason to open it is always "does this person's
   // contract read right", which is a biodata question first.
-  const [profileTab, setProfileTab] = useState<"biodata" | "contract" | "visa">("biodata");
+  const [profileTab, setProfileTab] =
+    useState<"biodata" | "contract" | "visa" | "employerform">("biodata");
   const [contract, setContract]     = useState<Contract | null>(null);
   const [contractLoaded, setContractLoaded] = useState(false);
   // Set from the employer dropdown: the sheet stands in for the employer form
@@ -490,26 +493,32 @@ Both links, the terms and the witnesses are on the Contracts page.`
   /* ── Which sheet the contract tab is showing ── */
   // The two forms share this view; only the field set, the value builder and
   // the export differ. Memoised so the sheet's own useMemo actually holds.
-  const isVisaTab = profileTab === "visa";
+  // Which of the three sheets the contract tab is showing. They share one view;
+  // only the field set, the value builder and the export differ.
+  const sheetForm = profileTab === "visa" ? "id988a"
+                  : profileTab === "employerform" ? "id988b"
+                  : "id407";
 
   const sheetBuildValues = useCallback(
-    (a: SheetApplicant, e: Employer | null, c: Contract | null) =>
-      isVisaTab
-        ? buildId988aValues(a, e, c)
-        : buildId407Values(
-            { full_name: a.full_name, nationality: a.nationality ?? null, signature_url: a.signature_url },
-            e, c ?? ({ terms: {} } as Contract)),
-    [isVisaTab],
+    (a: SheetApplicant, e: Employer | null, c: Contract | null) => {
+      if (sheetForm === "id988a") return buildId988aValues(a, e, c);
+      if (sheetForm === "id988b") return buildId988bValues(a, e, c);
+      return buildId407Values(
+        { full_name: a.full_name, nationality: a.nationality ?? null, signature_url: a.signature_url },
+        e, c ?? ({ terms: {} } as Contract));
+    },
+    [sheetForm],
   );
 
   const sheetExport = useCallback(
-    (a: SheetApplicant, e: Employer | null, c: Contract, o: ContractExportOptions) =>
-      isVisaTab
-        ? exportId988aPdf(a, e, c, o)
-        : exportContractPdf(
-            { full_name: a.full_name, nationality: a.nationality ?? null, signature_url: a.signature_url },
-            e, c, o),
-    [isVisaTab],
+    (a: SheetApplicant, e: Employer | null, c: Contract, o: ContractExportOptions) => {
+      if (sheetForm === "id988a") return exportId988aPdf(a, e, c, o);
+      if (sheetForm === "id988b") return exportId988bPdf(a, e, c, o);
+      return exportContractPdf(
+        { full_name: a.full_name, nationality: a.nationality ?? null, signature_url: a.signature_url },
+        e, c, o);
+    },
+    [sheetForm],
   );
 
   /* ── Required documents ── */
@@ -946,6 +955,7 @@ Both links, the terms and the witnesses are on the Contracts page.`
                   ["biodata",  "Biodata"],
                   ["contract", "ID 407 Contract"],
                   ["visa",     "ID 988A Visa"],
+                  ["employerform", "ID 988B Employer"],
                 ] as const).map(([key, label]) => (
                   <button
                     key={key}
@@ -957,7 +967,7 @@ Both links, the terms and the witnesses are on the Contracts page.`
                     }`}
                   >
                     {label}
-                    {(key === "contract" || key === "visa") && contractLoaded && !contract && (
+                    {key !== "biodata" && contractLoaded && !contract && (
                       <span className="ml-1.5 text-[10px] font-normal text-amber-500">not started</span>
                     )}
                   </button>
@@ -972,14 +982,14 @@ Both links, the terms and the witnesses are on the Contracts page.`
                 onCancel={() => setEditing(false)}
                 onSaved={handleApplicantSaved}
               />
-            ) : profileTab === "contract" || profileTab === "visa" ? (
+            ) : profileTab !== "biodata" ? (
               !contractLoaded
                 ? <div className="p-10 text-center text-sm text-gray-400">Loading contract…</div>
                 : <ContractSheetEditor
                     // Remounting on a form switch is deliberate: zoom, page and
                     // any half-finished edit belong to the sheet being left.
                     key={`${profileTab}-${contract?.id ?? "none"}`}
-                    formId={isVisaTab ? "id988a" : "id407"}
+                    formId={sheetForm}
                     buildValues={sheetBuildValues}
                     exportSheet={sheetExport}
                     // The visa form asks about the helper herself, so it needs
@@ -1004,7 +1014,7 @@ Both links, the terms and the witnesses are on the Contracts page.`
                     onContractSaved={setContract}
                     // Capturing a household off the sheet is an ID 407 feature;
                     // ID 988A carries none of those details.
-                    newEmployerMode={profileTab === "contract" && newEmployerMode}
+                    newEmployerMode={sheetForm === "id407" && newEmployerMode}
                     onEmployerCreated={handleEmployerCreated}
                     onCancelNewEmployer={() => setNewEmployerMode(false)}
                   />
