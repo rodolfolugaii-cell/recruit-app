@@ -162,6 +162,55 @@ function SizeStepper({
   );
 }
 
+/**
+ * A width or height field that commits on blur or Enter rather than on every
+ * keystroke.
+ *
+ * Applying as you type looks reasonable until someone clears the box to retype:
+ * the empty string parses to nothing, the box snaps to its minimum, and the
+ * controlled value fights the cursor. Holding a draft keeps typing free and
+ * still lands a single, clamped change.
+ */
+function SizeInput({
+  label, value, onCommit, tone = "slate",
+}: {
+  label: string;
+  /** "" when a selection disagrees, which shows as a "mixed" placeholder. */
+  value: number | "";
+  onCommit: (v: number) => void;
+  tone?: "slate" | "blue";
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const shown = draft ?? (value === "" ? "" : String(value));
+
+  const commit = () => {
+    if (draft === null) return;
+    const v = parseFloat(draft);
+    setDraft(null);
+    if (Number.isFinite(v)) onCommit(v);
+  };
+
+  return (
+    <label className="flex items-center gap-1">
+      <span className={`text-[11px] ${tone === "blue" ? "text-blue-500" : "text-slate-400"}`}>{label}</span>
+      <input
+        type="number" step={1} min={4}
+        value={shown}
+        placeholder={value === "" ? "mixed" : undefined}
+        onChange={e => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={e => {
+          if (e.key === "Enter") { e.preventDefault(); commit(); (e.target as HTMLInputElement).blur(); }
+          if (e.key === "Escape") { e.preventDefault(); setDraft(null); (e.target as HTMLInputElement).blur(); }
+        }}
+        className={`w-16 h-7 px-1.5 text-center text-xs tabular-nums text-slate-700 bg-white border rounded focus:outline-none focus:border-blue-400 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
+          tone === "blue" ? "border-blue-200" : "border-slate-300"
+        }`}
+      />
+    </label>
+  );
+}
+
 const TYPE_STYLE: Record<FieldType, { bg: string; border: string; badge: string; dot: string }> = {
   text:      { bg: "bg-blue-400/20",   border: "border-blue-500",   badge: "bg-blue-100 text-blue-700",    dot: "bg-blue-500"   },
   checkbox:  { bg: "bg-green-400/20",  border: "border-green-500",  badge: "bg-green-100 text-green-700",  dot: "bg-green-500"  },
@@ -194,8 +243,22 @@ export default function PdfMapper() {
   // full-page space, so changing this never moves a box relative to the form —
   // see pdfCrop.ts.
   const [crops, setCrops] = useState<Record<string, Crop>>({});
-  // Right-click menu over a placed box, for growing a comb one cell at a time
+  // Right-click menu over a placed box: resize it, or grow a comb a cell at a time
   const [ctxMenu, setCtxMenu] = useState<{ id: string; x: number; y: number } | null>(null);
+
+  /* ── Desktop-style selection ──────────────────────────────────────────────
+     Dragging on bare paper draws a rubber band and takes everything it touches,
+     the way a file manager does. `selection` is what that leaves behind, and
+     what the group toolbar acts on. It is separate from `selectedId`, which
+     means "the field I am about to place" — quite a different idea. */
+  const [selection, setSelection] = useState<string[]>([]);
+  const [marquee, setMarquee] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
+  // Read by the key handler, which must not be rebuilt on every selection change
+  const selectionRef = useRef<string[]>([]);
+  const deleteSelectionRef = useRef<() => void>(() => {});
+  const marqueeRef = useRef<{ x0: number; y0: number } | null>(null);
+  // The band's latest extent, so mouseup can select without waiting on a render
+  const marqueeNowRef = useRef<{ x0: number; y0: number; x1: number; y1: number } | null>(null);
   const crop = crops[form.id] ?? fullPageCrop(PDF_W, PDF_H);
   const margins = cropToMargins(crop, PDF_W, PDF_H);
   const cropped = !isFullPage(crop, PDF_W, PDF_H);
@@ -448,6 +511,74 @@ export default function PdfMapper() {
   };
 
   // ── Place a marker on PDF click ──────────────────────────────────────────────
+  /** Page point under the cursor, in the full-page space the mappings live in. */
+  const pagePoint = useCallback((clientX: number, clientY: number) => {
+    const rect = overlayRef.current!.getBoundingClientRect();
+    return {
+      x: ((clientX - rect.left) / rect.width)  * PDF_W,
+      y: ((clientY - rect.top)  / rect.height) * PDF_H,
+    };
+  }, [PDF_W, PDF_H]);
+
+  const handleOverlayMouseDown = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    // Markers stop their own mousedown, so reaching here means bare paper
+    if (e.button !== 0 || !overlayRef.current) return;
+    setCtxMenu(null);
+    const additive = e.shiftKey || e.ctrlKey || e.metaKey;
+    const start = pagePoint(e.clientX, e.clientY);
+    marqueeRef.current = { x0: start.x, y0: start.y };
+    let dragged = false;
+
+    const onMove = (me: MouseEvent) => {
+      const s = marqueeRef.current;
+      if (!s || !overlayRef.current) return;
+      const now = pagePoint(me.clientX, me.clientY);
+      if (!dragged && Math.hypot(now.x - s.x0, now.y - s.y0) < 3) return;
+      dragged = true;
+      const band = { x0: s.x0, y0: s.y0, x1: now.x, y1: now.y };
+      marqueeNowRef.current = band;
+      setMarquee(band);
+    };
+
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      const band = marqueeNowRef.current;
+      marqueeRef.current = null;
+      marqueeNowRef.current = null;
+      setMarquee(null);
+
+      if (!dragged || !band) {
+        // A plain click on bare paper drops the selection, like a desktop
+        if (!selectedId) setSelection([]);
+        return;
+      }
+
+      // Anything the band touches, not only what it swallows whole — a one-point
+      // wide comb cell is easy to miss otherwise.
+      const left = Math.min(band.x0, band.x1), right = Math.max(band.x0, band.x1);
+      const top  = Math.min(band.y0, band.y1), bottom = Math.max(band.y0, band.y1);
+      const hit = Object.values(mappingsRef.current)
+        .filter(m => m.page === currentPage && ownsField(m.field_id))
+        .filter(m => {
+          const w = m.field_type === "checkbox" ? CHECKBOX_SIZE : m.w;
+          const h = m.field_type === "checkbox" ? CHECKBOX_SIZE : m.h;
+          return m.x < right && m.x + w > left && m.y < bottom && m.y + h > top;
+        })
+        .map(m => m.field_id);
+
+      // Shift keeps what was already chosen, as every desktop does
+      setSelection(prev => additive ? [...new Set([...prev, ...hit])] : hit);
+
+      // Placement would be surprising after a rubber band, so suppress the click
+      didDragRef.current = true;
+      setTimeout(() => { didDragRef.current = false; }, 50);
+    };
+
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }, [pagePoint, selectedId, currentPage, ownsField]);
+
   const handleOverlayClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     // Don't place a new marker if this click was the tail-end of a drag
     if (didDragRef.current) return;
@@ -588,42 +719,97 @@ export default function PdfMapper() {
     };
 
     const onKeyDown = (e: KeyboardEvent) => {
-      const dir = DIRS[e.key];
-      if (!dir) return;
-      if (e.altKey) return;          // leave the browser's own alt+arrow alone
-
-      // Never steal the arrows from someone typing in the sidebar
+      // Never steal a key from someone typing in the sidebar or a size box
       const el = document.activeElement as HTMLElement | null;
       if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" ||
                  el.tagName === "SELECT" || el.isContentEditable)) return;
 
-      if (!selectedId) return;
-      const current = mappingsRef.current[selectedId];
+      // Escape drops the rubber-band selection, Delete clears what it holds
+      if (e.key === "Escape" && selectionRef.current.length) {
+        setSelection([]); setCtxMenu(null); return;
+      }
+      if ((e.key === "Delete" || e.key === "Backspace") && selectionRef.current.length) {
+        e.preventDefault(); deleteSelectionRef.current(); return;
+      }
+
+      const dir = DIRS[e.key];
+      if (!dir) return;
+      if (e.altKey) return;          // leave the browser's own alt+arrow alone
+
+      // A rubber-band selection moves as one; otherwise it is the box being
+      // placed. Nudging only the placing box while five sit selected would look
+      // like the arrows had stopped working.
+      const group = selectionRef.current.length
+        ? selectionRef.current
+        : selectedId ? [selectedId] : [];
+      if (!group.length) return;
+
       // A field that is selected but not yet placed has nothing to nudge, and a
       // box on another page would move invisibly
-      if (!current || current.page !== currentPage) return;
+      const movable = group.filter(id => {
+        const m = mappingsRef.current[id];
+        return m && m.page === currentPage;
+      });
+      if (!movable.length) return;
 
       // Shift for coarse, ctrl/cmd for the finest step the stored 0.1pt allows
       const step = e.shiftKey ? 10 : (e.ctrlKey || e.metaKey) ? 0.1 : 1;
       e.preventDefault();            // stop the page scrolling under the mapper
 
       setMappings(prev => {
-        const m = prev[selectedId];
-        if (!m) return prev;
-        return {
-          ...prev,
-          [selectedId]: {
+        const next = { ...prev };
+        movable.forEach(id => {
+          const m = next[id];
+          if (!m) return;
+          next[id] = {
             ...m,
             x: parseFloat(Math.max(0, Math.min(PDF_W, m.x + dir[0] * step)).toFixed(1)),
             y: parseFloat(Math.max(0, Math.min(PDF_H, m.y + dir[1] * step)).toFixed(1)),
-          },
-        };
+          };
+        });
+        return next;
       });
     };
 
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [selectedId, currentPage, PDF_W, PDF_H]);
+
+  /* ── Resizing ────────────────────────────────────────────────────────────
+     Until now a box took its size from the form's default and could never be
+     changed, so a field that printed too wide had to be lived with. */
+
+  /** Every id a size change should reach, given one starting id. */
+  const resizeGroup = useCallback((fieldId: string): string[] => {
+    // A comb is one field printed as a row of identical squares. Sizing one and
+    // not the rest would leave letters in boxes of different widths, so the
+    // whole comb follows suit.
+    const cell = parseCombCell(fieldId);
+    if (cell && form.combs?.some(c => c.base === cell.base)) {
+      return Object.keys(mappings).filter(
+        id => parseCombCell(id)?.base === cell.base
+      );
+    }
+    return [fieldId];
+  }, [form, mappings]);
+
+  const MIN_BOX = 4;   // pt — below this a box cannot be grabbed or seen
+
+  const resizeFields = useCallback((ids: string[], w?: number, h?: number) => {
+    setMappings(p => {
+      const next = { ...p };
+      ids.forEach(id => {
+        const m = next[id];
+        if (!m) return;
+        next[id] = {
+          ...m,
+          w: w === undefined ? m.w : parseFloat(Math.max(MIN_BOX, w).toFixed(1)),
+          h: h === undefined ? m.h : parseFloat(Math.max(MIN_BOX, h).toFixed(1)),
+        };
+      });
+      return next;
+    });
+  }, []);
 
   /* ── Growing a comb ──────────────────────────────────────────────────────
      The printed form has a fixed number of little squares, but a scan can be
@@ -677,6 +863,59 @@ export default function PdfMapper() {
     if (selectedId === fieldId) setSelectedId(null);
     showMsg(`Removed ${found.spec.label} box ${found.n}. Save All to keep the change.`);
   }, [combOf, selectedId]);
+
+  /* ── Group actions ──────────────────────────────────────────────────────── */
+  const selectionBoxes = useMemo(
+    () => selection.map(id => mappings[id]).filter(Boolean),
+    [selection, mappings],
+  );
+
+  useEffect(() => { selectionRef.current = selection; }, [selection]);
+
+  const deleteSelection = useCallback(() => {
+    if (!selection.length) return;
+    setMappings(p => {
+      const n = { ...p };
+      selection.forEach(id => delete n[id]);
+      return n;
+    });
+    showMsg(`Cleared ${selection.length} mapping${selection.length === 1 ? "" : "s"}. Save All to keep it.`);
+    setSelection([]);
+    setSelectedId(null);
+  }, [selection]);
+
+  useEffect(() => { deleteSelectionRef.current = deleteSelection; }, [deleteSelection]);
+
+  /** Line the selection up on whichever edge is furthest that way already. */
+  const alignSelection = useCallback((edge: "left" | "top") => {
+    if (selection.length < 2) return;
+    setMappings(p => {
+      const n = { ...p };
+      const value = edge === "left"
+        ? Math.min(...selection.map(id => n[id]?.x ?? Infinity))
+        : Math.min(...selection.map(id => n[id]?.y ?? Infinity));
+      selection.forEach(id => {
+        if (!n[id]) return;
+        n[id] = edge === "left" ? { ...n[id], x: value } : { ...n[id], y: value };
+      });
+      return n;
+    });
+  }, [selection]);
+
+  /** Even spacing across the row, for a comb placed by hand. */
+  const distributeSelection = useCallback(() => {
+    if (selection.length < 3) return;
+    setMappings(p => {
+      const n = { ...p };
+      const row = selection.map(id => n[id]).filter(Boolean).sort((a, b) => a.x - b.x);
+      const first = row[0].x, last = row[row.length - 1].x;
+      const step = (last - first) / (row.length - 1);
+      row.forEach((m, i) => {
+        n[m.field_id] = { ...m, x: parseFloat((first + i * step).toFixed(1)) };
+      });
+      return n;
+    });
+  }, [selection]);
 
   // ── Save mappings to Supabase ────────────────────────────────────────────────
   const handleSave = async () => {
@@ -884,7 +1123,7 @@ export default function PdfMapper() {
           {FORMS.map(f => (
             <button
               key={f.id}
-              onClick={() => { if (f.id !== formId) { setFormId(f.id); setCurrentPage(1); setSelectedId(null); } }}
+              onClick={() => { if (f.id !== formId) { setFormId(f.id); setCurrentPage(1); setSelectedId(null); setSelection([]); setCtxMenu(null); } }}
               className={`px-4 py-2 text-sm font-semibold transition-colors ${
                 f.id === formId
                   ? "bg-slate-800 text-white"
@@ -914,6 +1153,40 @@ export default function PdfMapper() {
             <p className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400 truncate">
               {FIELD_LOOKUP[ctxMenu.id]?.label ?? ctxMenu.id}
             </p>
+
+            {/* ── Box size ── */}
+            {mappings[ctxMenu.id] && (() => {
+              const m = mappings[ctxMenu.id];
+              const group = resizeGroup(ctxMenu.id);
+              const isCb = m.field_type === "checkbox";
+              return (
+                <div className="px-3 py-2 border-t border-slate-100">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-1.5">
+                    Box size
+                  </p>
+                  {isCb ? (
+                    <p className="text-[11px] text-slate-400 leading-snug">
+                      A tick box always prints at {CHECKBOX_SIZE}pt, so its size is fixed.
+                    </p>
+                  ) : (
+                    <>
+                      <div className="flex items-center gap-1.5">
+                        <SizeInput label="W" value={m.w} onCommit={v => resizeFields(group, v, undefined)} />
+                        <SizeInput label="H" value={m.h} onCommit={v => resizeFields(group, undefined, v)} />
+                        <span className="text-[11px] text-slate-400">pt</span>
+                      </div>
+                      {group.length > 1 && (
+                        <p className="mt-1.5 text-[10px] text-blue-600 leading-snug">
+                          Applies to all {group.length} boxes of this field, so the row stays even.
+                        </p>
+                      )}
+                    </>
+                  )}
+                </div>
+              );
+            })()}
+
+            <div className="border-t border-slate-100" />
             {combOf(ctxMenu.id) ? (
               <>
                 <button
@@ -1054,10 +1327,69 @@ export default function PdfMapper() {
             </span>
           </div>
 
+          {/* ── Group selection toolbar ────────────────────────────────────
+              Only here while something is selected, so it never competes with
+              the controls that are always needed. */}
+          {selection.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2 px-3 py-2 rounded-lg bg-blue-50 border border-blue-200">
+              <span className="text-[11px] font-bold text-blue-700 tabular-nums">
+                {selection.length} selected
+              </span>
+
+              {(() => {
+                const boxes = selectionBoxes.filter(m => m.field_type !== "checkbox");
+                if (!boxes.length) {
+                  return <span className="text-[11px] text-blue-500">Tick boxes print at a fixed size.</span>;
+                }
+                const same = (get: (m: typeof boxes[number]) => number) => {
+                  const first = get(boxes[0]);
+                  return boxes.every(m => get(m) === first) ? first : "";
+                };
+                return (
+                  <>
+                    <SizeInput tone="blue" label="W" value={same(m => m.w)}
+                      onCommit={v => resizeFields(selection, v, undefined)} />
+                    <SizeInput tone="blue" label="H" value={same(m => m.h)}
+                      onCommit={v => resizeFields(selection, undefined, v)} />
+                    <span className="text-[11px] text-blue-400">pt</span>
+                  </>
+                );
+              })()}
+
+              <span className="w-px h-5 bg-blue-200" />
+              <button onClick={() => alignSelection("left")} disabled={selection.length < 2}
+                title="Line them all up on the leftmost edge"
+                className="px-2 py-1 rounded text-[11px] font-semibold text-blue-700 hover:bg-blue-100 disabled:opacity-30 transition-colors">
+                Align left
+              </button>
+              <button onClick={() => alignSelection("top")} disabled={selection.length < 2}
+                title="Line them all up on the topmost edge"
+                className="px-2 py-1 rounded text-[11px] font-semibold text-blue-700 hover:bg-blue-100 disabled:opacity-30 transition-colors">
+                Align top
+              </button>
+              <button onClick={distributeSelection} disabled={selection.length < 3}
+                title="Space them evenly between the first and the last"
+                className="px-2 py-1 rounded text-[11px] font-semibold text-blue-700 hover:bg-blue-100 disabled:opacity-30 transition-colors">
+                Space evenly
+              </button>
+
+              <span className="w-px h-5 bg-blue-200" />
+              <button onClick={deleteSelection}
+                title="Clear these mappings — the fields stay, their positions go"
+                className="px-2 py-1 rounded text-[11px] font-semibold text-red-600 hover:bg-red-50 transition-colors">
+                Clear mappings
+              </button>
+              <button onClick={() => setSelection([])}
+                className="px-2 py-1 rounded text-[11px] font-semibold text-slate-500 hover:bg-slate-200 transition-colors">
+                Deselect
+              </button>
+            </div>
+          )}
+
           {/* Page toggle + zoom controls */}
           <div className="flex items-center gap-2">
             {PAGE_NUMBERS.map(p => (
-              <button key={p} onClick={() => { setCurrentPage(p); setSelectedId(null); }}
+              <button key={p} onClick={() => { setCurrentPage(p); setSelectedId(null); setSelection([]); setCtxMenu(null); }}
                 className={`px-4 py-1.5 text-sm font-medium rounded-lg transition-colors ${currentPage === p ? "bg-slate-800 text-white" : "bg-white text-slate-600 border border-slate-300 hover:bg-slate-50"}`}
               >
                 {/* ID 407 is a booklet: sheet 1 carries form pages 4 and 1 */}
@@ -1171,13 +1503,27 @@ export default function PdfMapper() {
                 />
                 {/* Click / marker overlay — always covers the zoom wrapper exactly */}
                 <div ref={overlayRef} onClick={handleOverlayClick}
+                  onMouseDown={handleOverlayMouseDown}
+                  onContextMenu={e => { e.preventDefault(); setCtxMenu(null); }}
                   className={`absolute inset-0 ${selectedId ? "cursor-crosshair" : "cursor-default"}`}>
+                  {marquee && (
+                    <div
+                      className="absolute border border-blue-500 bg-blue-400/15 pointer-events-none z-20"
+                      style={{
+                        left:   `${(Math.min(marquee.x0, marquee.x1) / PDF_W) * 100}%`,
+                        top:    `${(Math.min(marquee.y0, marquee.y1) / PDF_H) * 100}%`,
+                        width:  `${(Math.abs(marquee.x1 - marquee.x0) / PDF_W) * 100}%`,
+                        height: `${(Math.abs(marquee.y1 - marquee.y0) / PDF_H) * 100}%`,
+                      }}
+                    />
+                  )}
                   {Object.values(mappings)
                     .filter(m => m.page === currentPage && ownsField(m.field_id))
                     .map(m => {
                     const tk = (m.field_type in TYPE_STYLE ? m.field_type : "text") as FieldType;
                     const { bg, border } = TYPE_STYLE[tk];
                     const isSel  = selectedId === m.field_id;
+                    const inGroup = selection.includes(m.field_id);
                     const isCb   = m.field_type === "checkbox";
                     const isTxt  = isTextual(m.field_type);
 
@@ -1205,10 +1551,16 @@ export default function PdfMapper() {
                         onClick={e => {
                           e.stopPropagation();
                           setCtxMenu(null);
+                          if (e.shiftKey || e.ctrlKey || e.metaKey) {
+                            setSelection(prev => prev.includes(m.field_id)
+                              ? prev.filter(id => id !== m.field_id)
+                              : [...prev, m.field_id]);
+                            return;
+                          }
                           setSelectedId(m.field_id);
                           fieldRefs.current[m.field_id]?.scrollIntoView({ behavior: "smooth", block: "nearest" });
                         }}
-                        className={`absolute border-2 flex ${isCb ? "items-center justify-center" : "items-end justify-center overflow-hidden"} ${bg} ${border} ${isSel ? "ring-2 ring-yellow-400 ring-offset-1 z-10" : ""}`}
+                        className={`absolute border-2 flex ${isCb ? "items-center justify-center" : "items-end justify-center overflow-hidden"} ${bg} ${border} ${isSel ? "ring-2 ring-yellow-400 ring-offset-1 z-10" : inGroup ? "ring-2 ring-blue-500 ring-offset-1 z-10" : ""}`}
                         style={{
                           left: `${(m.x / PDF_W) * 100}%`,
                           top:  `${(m.y / PDF_H) * 100}%`,
