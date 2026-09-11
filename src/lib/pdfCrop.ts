@@ -80,11 +80,10 @@ export function cropToMargins(crop: Crop, width: number, height: number): CropMa
  * trusted to be sensible.
  */
 export function marginsToCrop(m: CropMargins, width: number, height: number): Crop {
-  const MIN = 40;   // pt — narrower than this is a mistake, not a crop
-  const left   = clamp(m.left,   0, width  - MIN);
-  const top    = clamp(m.top,    0, height - MIN);
-  const right  = clamp(m.right,  0, width  - MIN - left);
-  const bottom = clamp(m.bottom, 0, height - MIN - top);
+  const left   = clamp(m.left,   0, width  - MIN_CROP);
+  const top    = clamp(m.top,    0, height - MIN_CROP);
+  const right  = clamp(m.right,  0, width  - MIN_CROP - left);
+  const bottom = clamp(m.bottom, 0, height - MIN_CROP - top);
   return {
     x: round1(left),
     y: round1(top),
@@ -134,6 +133,55 @@ export function cropViewStyle(crop: Crop, width: number, height: number) {
       left:   `${(-crop.x / crop.w) * 100}%`,
       top:    `${(-crop.y / crop.h) * 100}%`,
     },
+  };
+}
+
+/** The grab points on the crop box, plus the body that moves the whole thing. */
+export type CropHandle = "move" | "n" | "s" | "e" | "w" | "nw" | "ne" | "sw" | "se";
+
+/** Narrower than this is a mistake, not a crop. Shared with marginsToCrop. */
+export const MIN_CROP = 40;
+
+/**
+ * The crop after dragging one handle by (dx, dy).
+ *
+ * Pure, because getting this wrong is easy and invisible: an edge must move
+ * without dragging its opposite edge along, must not invert when pulled past
+ * it, and must not leave the page. Doing the arithmetic here rather than inside
+ * a mousemove handler means all of that can actually be checked.
+ */
+export function dragCrop(
+  start: Crop,
+  handle: CropHandle,
+  dx: number,
+  dy: number,
+  width: number,
+  height: number,
+): Crop {
+  const { x, y, w, h } = start;
+
+  if (handle === "move") {
+    return {
+      x: round1(clamp(x + dx, 0, width - w)),
+      y: round1(clamp(y + dy, 0, height - h)),
+      w: round1(w), h: round1(h),
+    };
+  }
+
+  let left = x, top = y, right = x + w, bottom = y + h;
+
+  // Each edge is clamped against the page and against its opposite, so the box
+  // can be squashed down to MIN_CROP but never turned inside out.
+  if (handle.includes("w")) left   = clamp(x + dx,     0, right - MIN_CROP);
+  if (handle.includes("e")) right  = clamp(x + w + dx, left + MIN_CROP, width);
+  if (handle.includes("n")) top    = clamp(y + dy,     0, bottom - MIN_CROP);
+  if (handle.includes("s")) bottom = clamp(y + h + dy, top + MIN_CROP, height);
+
+  return {
+    x: round1(left),
+    y: round1(top),
+    w: round1(right - left),
+    h: round1(bottom - top),
   };
 }
 

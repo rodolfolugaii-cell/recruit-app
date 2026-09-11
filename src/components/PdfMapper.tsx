@@ -24,8 +24,8 @@ import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
 import { resetPdfTemplateCache } from "@/lib/pdfTemplates";
 import {
-  cropRowId, cropToMargins, fullPageCrop, isCropRow, isFullPage, marginsToCrop,
-  normaliseCrop, type Crop,
+  cropRowId, cropToMargins, dragCrop, fullPageCrop, isCropRow, isFullPage,
+  marginsToCrop, normaliseCrop, type Crop, type CropHandle,
 } from "@/lib/pdfCrop";
 import {
   CHECKBOX_SIZE, TICK_SIZE, TICK_WEIGHT,
@@ -269,6 +269,40 @@ export default function PdfMapper() {
   };
   const resetCrop = () =>
     setCrops(p => ({ ...p, [form.id]: fullPageCrop(PDF_W, PDF_H) }));
+
+  /* ── Adjusting the crop by eye ────────────────────────────────────────────
+     Numbers alone make you guess at what is being cut off. While this is on the
+     whole scan is shown with the crop drawn over it and everything outside it
+     dimmed, so the window can be dragged onto the form's real edges. */
+  const [cropEditing, setCropEditing] = useState(false);
+
+  const startCropDrag = useCallback((handle: CropHandle, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!overlayRef.current) return;
+    const rect  = overlayRef.current.getBoundingClientRect();
+    const scale = PDF_W / rect.width;          // screen px -> page points
+    const start = crops[form.id] ?? fullPageCrop(PDF_W, PDF_H);
+    const ox = e.clientX, oy = e.clientY;
+
+    const onMove = (me: MouseEvent) => {
+      const next = dragCrop(
+        start, handle,
+        (me.clientX - ox) * scale,
+        (me.clientY - oy) * scale,
+        PDF_W, PDF_H,
+      );
+      setCrops(p => ({ ...p, [form.id]: next }));
+    };
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      document.body.style.cursor = "";
+    };
+    document.body.style.cursor = handle === "move" ? "move" : `${handle}-resize`;
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }, [crops, form.id, PDF_W, PDF_H]);
   const PAGE_NUMBERS = useMemo(
     () => Array.from({ length: form.pages }, (_, i) => i + 1),
     [form],
@@ -1299,6 +1333,19 @@ export default function PdfMapper() {
             <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
               Crop
             </span>
+            <button
+              onClick={() => { setCropEditing(v => !v); setSelection([]); setCtxMenu(null); }}
+              title={cropEditing
+                ? "Go back to seeing the cropped result"
+                : "Show the whole scan and drag the crop window onto the form's edges"}
+              className={`px-2.5 py-1 rounded text-[11px] font-semibold transition-colors ${
+                cropEditing
+                  ? "bg-blue-600 text-white hover:bg-blue-700"
+                  : "bg-white text-slate-600 border border-slate-300 hover:bg-slate-50"
+              }`}
+            >
+              {cropEditing ? "Done adjusting" : "Adjust visually"}
+            </button>
             {(["top", "right", "bottom", "left"] as const).map(edge => (
               <label key={edge} className="flex items-center gap-1">
                 <span className="text-[11px] text-slate-400 capitalize">{edge}</span>
@@ -1322,8 +1369,14 @@ export default function PdfMapper() {
                 Reset
               </button>
             )}
-            <span className={`text-[11px] font-medium ${cropped ? "text-amber-600" : "text-slate-400"}`}>
-              {cropped ? "Applies to the sheet editor and the export — Save All to keep it" : "Full scan"}
+            <span className={`text-[11px] font-medium ${
+              cropEditing ? "text-blue-600" : cropped ? "text-amber-600" : "text-slate-400"
+            }`}>
+              {cropEditing
+                ? "Drag the frame or its handles — the dimmed area is what gets cut off"
+                : cropped
+                  ? "Applies to the sheet editor and the export — Save All to keep it"
+                  : "Full scan"}
             </span>
           </div>
 
@@ -1477,8 +1530,8 @@ export default function PdfMapper() {
             {!loadingStorage && !renderingPdf && !showUploadZone && (
               <div
                 style={{
-                  width:    `${(crop.w / PDF_W) * renderW}px`,
-                  height:   `${(crop.h / PDF_W) * renderW}px`,
+                  width:    `${((cropEditing ? PDF_W : crop.w) / PDF_W) * renderW}px`,
+                  height:   `${((cropEditing ? PDF_H : crop.h) / PDF_W) * renderW}px`,
                   position: "relative",
                   overflow: "hidden",
                 }}
@@ -1487,8 +1540,8 @@ export default function PdfMapper() {
                 style={{
                   width:    `${renderW}px`,
                   position: "absolute",
-                  left:     `${(-crop.x / PDF_W) * renderW}px`,
-                  top:      `${(-crop.y / PDF_W) * renderW}px`,
+                  left:     `${(cropEditing ? 0 : -crop.x / PDF_W) * renderW}px`,
+                  top:      `${(cropEditing ? 0 : -crop.y / PDF_W) * renderW}px`,
                 }}
               >
                 {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -1502,10 +1555,52 @@ export default function PdfMapper() {
                   onLoad={()  => setImgFailed(p => { const n = { ...p }; delete n[currentPage]; return n; })}
                 />
                 {/* Click / marker overlay — always covers the zoom wrapper exactly */}
-                <div ref={overlayRef} onClick={handleOverlayClick}
-                  onMouseDown={handleOverlayMouseDown}
+                <div ref={overlayRef}
+                  onClick={cropEditing ? undefined : handleOverlayClick}
+                  onMouseDown={cropEditing ? undefined : handleOverlayMouseDown}
                   onContextMenu={e => { e.preventDefault(); setCtxMenu(null); }}
                   className={`absolute inset-0 ${selectedId ? "cursor-crosshair" : "cursor-default"}`}>
+                  {/* ── The crop window, while it is being adjusted ──────────
+                      Four dimmed bands show what is being cut off; the frame
+                      moves, and the eight handles resize it. */}
+                  {cropEditing && (
+                    <div className="absolute inset-0 z-30">
+                      {([
+                        { top: 0, left: 0, right: 0, height: `${(crop.y / PDF_H) * 100}%` },
+                        { bottom: 0, left: 0, right: 0, height: `${((PDF_H - crop.y - crop.h) / PDF_H) * 100}%` },
+                        { top: `${(crop.y / PDF_H) * 100}%`, left: 0, width: `${(crop.x / PDF_W) * 100}%`, height: `${(crop.h / PDF_H) * 100}%` },
+                        { top: `${(crop.y / PDF_H) * 100}%`, right: 0, width: `${((PDF_W - crop.x - crop.w) / PDF_W) * 100}%`, height: `${(crop.h / PDF_H) * 100}%` },
+                      ] as React.CSSProperties[]).map((band, i) => (
+                        <div key={i} className="absolute bg-slate-900/55" style={band} />
+                      ))}
+
+                      <div
+                        onMouseDown={e => startCropDrag("move", e)}
+                        className="absolute border-2 border-blue-500 cursor-move"
+                        style={{
+                          left:   `${(crop.x / PDF_W) * 100}%`,
+                          top:    `${(crop.y / PDF_H) * 100}%`,
+                          width:  `${(crop.w / PDF_W) * 100}%`,
+                          height: `${(crop.h / PDF_H) * 100}%`,
+                        }}
+                      >
+                        {([
+                          ["nw", "0%",   "0%",   "nwse"], ["n", "50%",  "0%",   "ns"],
+                          ["ne", "100%", "0%",   "nesw"], ["e", "100%", "50%",  "ew"],
+                          ["se", "100%", "100%", "nwse"], ["s", "50%",  "100%", "ns"],
+                          ["sw", "0%",   "100%", "nesw"], ["w", "0%",   "50%",  "ew"],
+                        ] as [CropHandle, string, string, string][]).map(([h, left, top, cur]) => (
+                          <span
+                            key={h}
+                            onMouseDown={e => startCropDrag(h, e)}
+                            className="absolute w-3 h-3 -ml-1.5 -mt-1.5 rounded-sm bg-white border-2 border-blue-500 shadow"
+                            style={{ left, top, cursor: `${cur}-resize` }}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   {marquee && (
                     <div
                       className="absolute border border-blue-500 bg-blue-400/15 pointer-events-none z-20"
