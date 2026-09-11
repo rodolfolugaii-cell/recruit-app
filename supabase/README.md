@@ -18,6 +18,7 @@ order**. Later files reference tables from earlier ones, so the order matters.
 | `20260818000400_contracts.sql` | `contracts`, its RLS policy, and the two signing-link functions |
 | `20260905000100_contract_field_edits.sql` | per-contract box moves and typed corrections for the ID 407 export |
 | `20260908000100_applicant_documents.sql` | `applicants.documents` — the six required copies, ticked off per helper |
+| `20260912000100_field_alignment.sql` | `pdf_field_mappings.align` — left or centred text, per mapped box |
 
 **They are safe to re-run and safe on the live database.** Every table is
 `CREATE TABLE IF NOT EXISTS`, every later column is a separate

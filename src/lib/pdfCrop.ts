@@ -145,6 +145,9 @@ export const MIN_CROP = 40;
 /**
  * The crop after dragging one handle by (dx, dy).
  *
+ * Used for the crop window and, with a smaller `min`, for dragging a mapped
+ * box by its handles — the geometry is the same rectangle problem either way.
+ *
  * Pure, because getting this wrong is easy and invisible: an edge must move
  * without dragging its opposite edge along, must not invert when pulled past
  * it, and must not leave the page. Doing the arithmetic here rather than inside
@@ -157,6 +160,8 @@ export function dragCrop(
   dy: number,
   width: number,
   height: number,
+  /** Smallest the rectangle may become. A mapped box may go far smaller than a crop. */
+  min: number = MIN_CROP,
 ): Crop {
   const { x, y, w, h } = start;
 
@@ -172,10 +177,10 @@ export function dragCrop(
 
   // Each edge is clamped against the page and against its opposite, so the box
   // can be squashed down to MIN_CROP but never turned inside out.
-  if (handle.includes("w")) left   = clamp(x + dx,     0, right - MIN_CROP);
-  if (handle.includes("e")) right  = clamp(x + w + dx, left + MIN_CROP, width);
-  if (handle.includes("n")) top    = clamp(y + dy,     0, bottom - MIN_CROP);
-  if (handle.includes("s")) bottom = clamp(y + h + dy, top + MIN_CROP, height);
+  if (handle.includes("w")) left   = clamp(x + dx,     0, right - min);
+  if (handle.includes("e")) right  = clamp(x + w + dx, left + min, width);
+  if (handle.includes("n")) top    = clamp(y + dy,     0, bottom - min);
+  if (handle.includes("s")) bottom = clamp(y + h + dy, top + min, height);
 
   return {
     x: round1(left),

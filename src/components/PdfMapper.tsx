@@ -113,7 +113,7 @@ async function uploadPageToStorage(
 // ── Types ─────────────────────────────────────────────────────────────────────
 // FieldType / FieldDef / FormSection describe what a form HAS; Mapping is the
 // row in pdf_field_mappings saying where one of those fields sits.
-interface Mapping   { field_id: string; label: string; field_type: string; page: number; x: number; y: number; w: number; h: number; font_size?: number | null; }
+interface Mapping   { field_id: string; label: string; field_type: string; page: number; x: number; y: number; w: number; h: number; font_size?: number | null; align?: string | null; }
 
 // Only these types print text, so only they get a size control
 const isTextual = (type: string) => type === "text" || type === "date";
@@ -829,6 +829,28 @@ export default function PdfMapper() {
 
   const MIN_BOX = 4;   // pt — below this a box cannot be grabbed or seen
 
+  /**
+   * How a value sits in its box.
+   *
+   * Centred suits a blank on a printed form; left suits prose that continues
+   * onto the line below, where the lines must share a margin to read as one
+   * paragraph. Clearing it hands the choice back to the form's own rule.
+   */
+  const setAlign = useCallback((ids: string[], align: "left" | "center" | null) => {
+    setMappings(p => {
+      const next = { ...p };
+      ids.forEach(id => { if (next[id]) next[id] = { ...next[id], align }; });
+      return next;
+    });
+  }, []);
+
+  /** What a box will actually do, given the form's rule when it has no choice of its own. */
+  const effectiveAlign = useCallback((id: string): "left" | "center" => {
+    const m = mappings[id];
+    if (m?.align === "left" || m?.align === "center") return m.align;
+    return form.paragraphs.some(g => g.includes(id)) ? "left" : "center";
+  }, [mappings, form]);
+
   const resizeFields = useCallback((ids: string[], w?: number, h?: number) => {
     setMappings(p => {
       const next = { ...p };
@@ -844,6 +866,56 @@ export default function PdfMapper() {
       return next;
     });
   }, []);
+
+  /**
+   * Drag one edge or corner of a mapped box.
+   *
+   * Same rectangle problem as the crop window, so the same swept-tested
+   * geometry does the arithmetic — only the minimum differs, since a box may be
+   * far smaller than a crop. A comb resizes as one, exactly as the numeric
+   * fields do, so a row of letter squares cannot end up ragged.
+   */
+  const startBoxResize = useCallback((fieldId: string, handle: CropHandle, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const m = mappingsRef.current[fieldId];
+    if (!m || !overlayRef.current) return;
+
+    const rect  = overlayRef.current.getBoundingClientRect();
+    const scale = PDF_W / rect.width;
+    const start = { x: m.x, y: m.y, w: m.w, h: m.h };
+    const group = resizeGroup(fieldId);
+    const ox = e.clientX, oy = e.clientY;
+
+    const onMove = (me: MouseEvent) => {
+      const next = dragCrop(
+        start, handle,
+        (me.clientX - ox) * scale,
+        (me.clientY - oy) * scale,
+        PDF_W, PDF_H, MIN_BOX,
+      );
+      setMappings(p => {
+        const out = { ...p };
+        group.forEach(id => {
+          const box = out[id];
+          if (!box) return;
+          // Only this box moves; the rest of a comb just matches its size
+          out[id] = id === fieldId
+            ? { ...box, x: next.x, y: next.y, w: next.w, h: next.h }
+            : { ...box, w: next.w, h: next.h };
+        });
+        return out;
+      });
+    };
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      document.body.style.cursor = "";
+    };
+    document.body.style.cursor = `${handle}-resize`;
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }, [PDF_W, PDF_H, resizeGroup]);
 
   /* ── Growing a comb ──────────────────────────────────────────────────────
      The printed form has a fixed number of little squares, but a scan can be
@@ -972,6 +1044,7 @@ export default function PdfMapper() {
       page:       m.page,
       x: m.x, y: m.y, w: m.w, h: m.h,
       font_size:  m.font_size ?? null,
+      align:      m.align ?? null,
     });
 
     // A crop row per form that has one, in the same x/y/w/h columns a field
@@ -1000,7 +1073,9 @@ export default function PdfMapper() {
       setSaveStatus("error");
       showMsg(/font_size/.test(error.message)
         ? "Error: column 'font_size' is missing — run: ALTER TABLE pdf_field_mappings ADD COLUMN IF NOT EXISTS font_size FLOAT;"
-        : `Error: ${error.message}`);
+        : /align/.test(error.message)
+          ? "Error: column 'align' is missing — run supabase/migrations/20260912000100_field_alignment.sql"
+          : `Error: ${error.message}`);
     } else {
       setSaveStatus("saved");
       resetPdfTemplateCache();  // next biodata export picks up the new sizes/positions
@@ -1215,6 +1290,55 @@ export default function PdfMapper() {
                         </p>
                       )}
                     </>
+                  )}
+                </div>
+              );
+            })()}
+
+            {/* ── Text alignment ── */}
+            {mappings[ctxMenu.id] && mappings[ctxMenu.id].field_type !== "checkbox" && (() => {
+              const m = mappings[ctxMenu.id];
+              const group = resizeGroup(ctxMenu.id);
+              const eff = effectiveAlign(ctxMenu.id);
+              const auto = m.align !== "left" && m.align !== "center";
+              return (
+                <div className="px-3 py-2 border-t border-slate-100">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-1.5">
+                    Text starts
+                  </p>
+                  <div className="inline-flex rounded-md border border-slate-300 overflow-hidden">
+                    {([
+                      ["left",   "Left edge", "Prose that carries on to the line below"],
+                      ["center", "Centre",    "A value sitting in the middle of a printed blank"],
+                    ] as const).map(([value, label, hint]) => (
+                      <button
+                        key={value}
+                        title={hint}
+                        onClick={() => setAlign(group, value)}
+                        className={`px-2.5 py-1 text-[11px] font-semibold transition-colors ${
+                          !auto && m.align === value
+                            ? "bg-slate-800 text-white"
+                            : "bg-white text-slate-600 hover:bg-slate-50"
+                        }`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="mt-1.5 text-[10px] text-slate-400 leading-snug">
+                    {auto
+                      ? `Following the form: ${eff === "left" ? "left edge" : "centred"}.`
+                      : group.length > 1
+                        ? `Set for all ${group.length} boxes of this field.`
+                        : "Set for this box."}
+                  </p>
+                  {!auto && (
+                    <button
+                      onClick={() => setAlign(group, null)}
+                      className="mt-1 text-[10px] font-semibold text-blue-600 hover:underline"
+                    >
+                      Follow the form again
+                    </button>
                   )}
                 </div>
               );
@@ -1619,6 +1743,8 @@ export default function PdfMapper() {
                     const { bg, border } = TYPE_STYLE[tk];
                     const isSel  = selectedId === m.field_id;
                     const inGroup = selection.includes(m.field_id);
+                    // Preview where the value will really sit, not always centred
+                    const alignOf = effectiveAlign(m.field_id);
                     const isCb   = m.field_type === "checkbox";
                     const isTxt  = isTextual(m.field_type);
 
@@ -1655,7 +1781,10 @@ export default function PdfMapper() {
                           setSelectedId(m.field_id);
                           fieldRefs.current[m.field_id]?.scrollIntoView({ behavior: "smooth", block: "nearest" });
                         }}
-                        className={`absolute border-2 flex ${isCb ? "items-center justify-center" : "items-end justify-center overflow-hidden"} ${bg} ${border} ${isSel ? "ring-2 ring-yellow-400 ring-offset-1 z-10" : inGroup ? "ring-2 ring-blue-500 ring-offset-1 z-10" : ""}`}
+                        className={`absolute border-2 flex ${
+                          isCb ? "items-center justify-center"
+                               : `items-end overflow-hidden ${alignOf === "left" ? "justify-start" : "justify-center"}`
+                        } ${bg} ${border} ${isSel ? "ring-2 ring-yellow-400 ring-offset-1 z-10" : inGroup ? "ring-2 ring-blue-500 ring-offset-1 z-10" : ""}`}
                         style={{
                           left: `${(m.x / PDF_W) * 100}%`,
                           top:  `${(m.y / PDF_H) * 100}%`,
@@ -1665,6 +1794,28 @@ export default function PdfMapper() {
                           cursor: "grab",
                         }}
                       >
+                        {/* Resize handles, on the selected box only — eight dots on
+                            every marker would bury the page. A tick box has no
+                            size to change, so it gets none. */}
+                        {isSel && !isCb && (
+                          <>
+                            {([
+                              ["nw", "0%",   "0%",   "nwse"], ["n", "50%",  "0%",   "ns"],
+                              ["ne", "100%", "0%",   "nesw"], ["e", "100%", "50%",  "ew"],
+                              ["se", "100%", "100%", "nwse"], ["s", "50%",  "100%", "ns"],
+                              ["sw", "0%",   "100%", "nesw"], ["w", "0%",   "50%",  "ew"],
+                            ] as [CropHandle, string, string, string][]).map(([hd, left, top, cur]) => (
+                              <span
+                                key={hd}
+                                onMouseDown={ev => startBoxResize(m.field_id, hd, ev)}
+                                onClick={ev => ev.stopPropagation()}
+                                className="absolute w-2 h-2 -ml-1 -mt-1 rounded-[2px] bg-white border border-yellow-500 shadow-sm z-20"
+                                style={{ left, top, cursor: `${cur}-resize` }}
+                              />
+                            ))}
+                          </>
+                        )}
+
                         {/* True-to-print tick: same geometry the exporter draws, with the
                             vertex pinned to the centre of this square. Rendered from a
                             zero-sized SVG at 50%/50% with overflow visible, so the arms
@@ -1703,6 +1854,7 @@ export default function PdfMapper() {
                             whiteSpace: "nowrap",
                             color: "rgba(15,23,42,0.8)",
                             paddingBottom: `${2 * pxPerPt}px`,
+                            paddingLeft: alignOf === "left" ? `${1 * pxPerPt}px` : undefined,
                             pointerEvents: "none", userSelect: "none",
                           }}>{m.label}</span>
                         )}

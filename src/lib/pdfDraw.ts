@@ -51,6 +51,11 @@ export interface FieldMapping {
   w:          number;
   h:          number;
   font_size?: number | null;
+  /**
+   * "left" | "center", or absent to follow the form's own rule.
+   * Set per box in PDF Mapper — see the 0600 migration.
+   */
+  align?: string | null;
 }
 
 /** Value per field: a string prints as text, `true` draws a tick, anything else is skipped. */
@@ -492,7 +497,9 @@ export function stampFields(opts: {
       // worst 1pt a side and the value can never be centred out of its box.
       const textW = font.widthOfTextAtSize(fitted.text, fitted.size);
       page.drawText(fitted.text, {
-        x: leftAlignFields.has(m.field_id)
+        // The box's own choice wins; without one, a paragraph line goes left
+        // and everything else is centred in its blank.
+        x: (m.align ?? (leftAlignFields.has(m.field_id) ? "left" : "center")) === "left"
           ? m.x + 1
           : m.x + (m.w - textW) / 2,
         y: toLibY(m, pageHeight) + 2,   // 2pt padding from the bottom of the zone

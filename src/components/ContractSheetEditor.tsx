@@ -118,6 +118,12 @@ export default function ContractSheetEditor({
 }) {
   const { form, PDF_W, PDF_H, PAGES, FIELD_TYPES, FIELD_LABELS, PARAGRAPH_OF } =
     useMemo(() => formFacts(formId), [formId]);
+
+  /** Where a value sits in its box, matching stampFields exactly. */
+  const alignOf = useCallback((m: FieldMapping): "left" | "center" => {
+    if (m.align === "left" || m.align === "center") return m.align;
+    return PARAGRAPH_OF[m.field_id] ? "left" : "center";
+  }, [PARAGRAPH_OF]);
   const [mappings, setMappings] = useState<FieldMapping[]>([]);
   const [defaultSize, setDefaultSize] = useState(8);
   const [images, setImages] = useState<Record<number, string>>({});
@@ -769,7 +775,9 @@ export default function ContractSheetEditor({
               // point is knowing where you may click. Blue is editable, green has
               // been hand-edited, and the outline can be switched off to read the
               // sheet as it will print.
-              className={`flex items-end justify-center overflow-hidden transition-colors ${
+              className={`flex items-end overflow-hidden transition-colors ${
+                alignOf(m) === "left" ? "justify-start" : "justify-center"
+              } ${
                 isMoving
                   ? "ring-2 ring-blue-500 bg-blue-100/70 z-30"
                   : edited
