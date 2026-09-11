@@ -24,6 +24,10 @@ import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { supabase } from "@/lib/supabase";
 import { resetPdfTemplateCache } from "@/lib/pdfTemplates";
 import {
+  cropRowId, cropToMargins, fullPageCrop, isCropRow, isFullPage, marginsToCrop,
+  normaliseCrop, type Crop,
+} from "@/lib/pdfCrop";
+import {
   CHECKBOX_SIZE, TICK_SIZE, TICK_WEIGHT,
   TICK_LEFT_DX, TICK_LEFT_DY, TICK_RIGHT_DX, TICK_RIGHT_DY,
 } from "@/lib/pdfDraw";
@@ -183,6 +187,21 @@ export default function PdfMapper() {
   // pdf_field_mappings holds every form's rows. Without this the biodata's 157
   // boxes would all draw on top of ID 407 sheet 1, since both call it page 1.
   const FORM_IDS     = useMemo(() => formFieldIds(form), [form]);
+
+  // The crop window per form, as loaded and as edited. Field positions stay in
+  // full-page space, so changing this never moves a box relative to the form —
+  // see pdfCrop.ts.
+  const [crops, setCrops] = useState<Record<string, Crop>>({});
+  const crop = crops[form.id] ?? fullPageCrop(PDF_W, PDF_H);
+  const margins = cropToMargins(crop, PDF_W, PDF_H);
+  const cropped = !isFullPage(crop, PDF_W, PDF_H);
+
+  const setMargin = (edge: "top" | "right" | "bottom" | "left", value: number) => {
+    const next = marginsToCrop({ ...margins, [edge]: value }, PDF_W, PDF_H);
+    setCrops(p => ({ ...p, [form.id]: next }));
+  };
+  const resetCrop = () =>
+    setCrops(p => ({ ...p, [form.id]: fullPageCrop(PDF_W, PDF_H) }));
   const PAGE_NUMBERS = useMemo(
     () => Array.from({ length: form.pages }, (_, i) => i + 1),
     [form],
@@ -288,14 +307,23 @@ export default function PdfMapper() {
       if (error) { showMsg("Could not load mappings — check the Supabase table exists."); return; }
       if (data?.length) {
         const map: Record<string, Mapping> = {};
+        const loadedCrops: Record<string, Crop> = {};
         data.forEach((row: Mapping) => {
           // The settings row carries the global default size, not a field
           if (row.field_id === SETTINGS_ROW_ID) {
             if (row.font_size && row.font_size > 0) setDefaultFontSize(row.font_size);
             return;
           }
+          // A crop row carries one form's window in the same x/y/w/h columns
+          if (isCropRow(row.field_id)) {
+            const id = row.field_id.slice("__crop_".length, -"__".length);
+            const f  = FORMS.find(x => x.id === id);
+            if (f) loadedCrops[id] = normaliseCrop(row, f.width, f.height);
+            return;
+          }
           map[row.field_id] = row;
         });
+        setCrops(loadedCrops);
 
         // Carry retired ids onto their replacement, then drop them from view
         let carried = 0;
@@ -577,7 +605,8 @@ export default function PdfMapper() {
 
   // ── Save mappings to Supabase ────────────────────────────────────────────────
   const handleSave = async () => {
-    const rows = Object.values(mappings).filter(m => m.field_id !== SETTINGS_ROW_ID);
+    const rows = Object.values(mappings)
+      .filter(m => m.field_id !== SETTINGS_ROW_ID && !isCropRow(m.field_id));
     if (!rows.length) { showMsg("Nothing to save yet."); return; }
     setSaveStatus("saving");
 
@@ -597,8 +626,21 @@ export default function PdfMapper() {
       font_size:  m.font_size ?? null,
     });
 
+    // A crop row per form that has one, in the same x/y/w/h columns a field
+    // uses. An uncropped form writes nothing, so the table stays as it was.
+    const cropRows = Object.entries(crops)
+      .filter(([id, c]) => {
+        const f = FORMS.find(x => x.id === id);
+        return f && !isFullPage(c, f.width, f.height);
+      })
+      .map(([id, c]) => ({
+        field_id: cropRowId(id), label: `${id} crop`, field_type: "crop",
+        page: 0, x: c.x, y: c.y, w: c.w, h: c.h, font_size: null,
+      }));
+
     const payload = [
       ...rows.map(toRow),
+      ...cropRows,
       {
         field_id: SETTINGS_ROW_ID, label: "Global settings", field_type: "settings",
         page: 0, x: 0, y: 0, w: 0, h: 0, font_size: defaultFontSize,
@@ -854,6 +896,42 @@ export default function PdfMapper() {
         {/* ── LEFT: PDF viewer — takes all remaining space ───────────────────── */}
         <div className="flex flex-col gap-2 flex-1 min-w-0">
 
+          {/* ── Crop: trim the scan's white margin ────────────────────────
+              Field positions are untouched by this. They live in full-page
+              space, so moving an edge shifts the form and every box together
+              and a mapping stays correct — see pdfCrop.ts. */}
+          <div className="flex flex-wrap items-center gap-2 px-3 py-2 rounded-lg bg-slate-50 border border-slate-200">
+            <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">
+              Crop
+            </span>
+            {(["top", "right", "bottom", "left"] as const).map(edge => (
+              <label key={edge} className="flex items-center gap-1">
+                <span className="text-[11px] text-slate-400 capitalize">{edge}</span>
+                <input
+                  type="number" step={1} min={0}
+                  value={margins[edge]}
+                  onChange={e => setMargin(edge, parseFloat(e.target.value) || 0)}
+                  className="w-14 h-7 px-1.5 text-center text-xs tabular-nums text-slate-700 bg-white border border-slate-300 rounded focus:outline-none focus:border-blue-400 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                />
+              </label>
+            ))}
+            <span className="text-[11px] text-slate-400 tabular-nums">
+              pt · page {Math.round(crop.w)} × {Math.round(crop.h)}
+            </span>
+            {cropped && (
+              <button
+                onClick={resetCrop}
+                title="Show the whole scan again"
+                className="px-2 py-1 rounded text-[11px] font-semibold text-slate-500 hover:bg-slate-200 transition-colors"
+              >
+                Reset
+              </button>
+            )}
+            <span className={`text-[11px] font-medium ${cropped ? "text-amber-600" : "text-slate-400"}`}>
+              {cropped ? "Applies to the sheet editor and the export — Save All to keep it" : "Full scan"}
+            </span>
+          </div>
+
           {/* Page toggle + zoom controls */}
           <div className="flex items-center gap-2">
             {PAGE_NUMBERS.map(p => (
@@ -943,7 +1021,22 @@ export default function PdfMapper() {
 
             {/* PDF image inside zoom wrapper */}
             {!loadingStorage && !renderingPdf && !showUploadZone && (
-              <div style={{ width: `${renderW}px`, position: "relative" }}>
+              <div
+                style={{
+                  width:    `${(crop.w / PDF_W) * renderW}px`,
+                  height:   `${(crop.h / PDF_W) * renderW}px`,
+                  position: "relative",
+                  overflow: "hidden",
+                }}
+              >
+              <div
+                style={{
+                  width:    `${renderW}px`,
+                  position: "absolute",
+                  left:     `${(-crop.x / PDF_W) * renderW}px`,
+                  top:      `${(-crop.y / PDF_W) * renderW}px`,
+                }}
+              >
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   key={pageImages[currentPage]}
@@ -1041,6 +1134,7 @@ export default function PdfMapper() {
                     );
                   })}
                 </div>
+              </div>
               </div>
             )}
 

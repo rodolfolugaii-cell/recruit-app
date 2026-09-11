@@ -30,6 +30,8 @@ import {
   fetchAllMappings, mappingsForForm, resetPdfTemplateCache, TEMPLATE_BUCKET,
 } from "@/lib/pdfTemplates";
 import { formFieldIds, getForm, templateImageName } from "@/lib/pdfForms";
+import { cropForForm } from "@/lib/pdfTemplates";
+import { fullPageCrop, type Crop } from "@/lib/pdfCrop";
 import { buildId407Values, type ContractApplicant } from "@/lib/id407";
 import { sizeFor, type FieldMapping } from "@/lib/pdfDraw";
 import {
@@ -129,7 +131,10 @@ export default function ContractSheetEditor({
   // Measured from the scroll container, so 100% means "fits the modal" and every
   // other level is honestly relative to it
   const [contW, setContW] = useState(0);
-  const renderW = Math.round(contW * zoom / 100);
+  // renderW stays the FULL page width. The crop only clips what is visible, so
+  // every coordinate below — and pxPerPt — keeps working in full-page space.
+  const [crop, setCrop] = useState<Crop>(() => fullPageCrop(PDF_W, PDF_H));
+  const renderW = Math.round((contW * zoom / 100) * (PDF_W / crop.w));
   const pxPerPt = renderW / PDF_W;
 
   /* ── Load the shared mapping and both sheet images ───────────────────────── */
@@ -139,10 +144,12 @@ export default function ContractSheetEditor({
       setLoading(true);
       setLoadError(null);
       try {
-        const { rows, defaultSize: ds } = await fetchAllMappings();
+        const { rows, defaultSize: ds, crops } = await fetchAllMappings();
         if (cancelled) return;
         setMappings(mappingsForForm(rows, formFieldIds(ID407)));
         setDefaultSize(ds);
+        // The same window the mapper set and the export will use
+        setCrop(cropForForm(crops, ID407.id, PDF_W, PDF_H));
 
         const urls: Record<number, string> = {};
         for (const p of PAGES) {
@@ -618,8 +625,19 @@ export default function ContractSheetEditor({
         style={{ maxHeight: "calc(90vh - 260px)" }}
       >
       <div
-        className="relative bg-white select-none"
-        style={{ width: renderW ? `${renderW}px` : "100%" }}
+        className="relative bg-white select-none overflow-hidden"
+        style={{
+          width:  renderW ? `${(crop.w / PDF_W) * renderW}px` : "100%",
+          height: renderW ? `${(crop.h / PDF_W) * renderW}px` : undefined,
+        }}
+      >
+      <div
+        className="absolute bg-white select-none"
+        style={{
+          width: renderW ? `${renderW}px` : "100%",
+          left:  renderW ? `${(-crop.x / PDF_W) * renderW}px` : 0,
+          top:   renderW ? `${(-crop.y / PDF_W) * renderW}px` : 0,
+        }}
         ref={sheetRef}
         // A click on bare paper is the "outside" that throws an edit away
         onMouseDown={() => { if (editingId) cancelEdit(); setCtxMenu(null); }}
@@ -836,6 +854,7 @@ export default function ContractSheetEditor({
           </div>
         </>
       )}
+      </div>
     </div>
   );
 }

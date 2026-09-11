@@ -30,6 +30,13 @@
  *
  * `includeTemplate` puts the scan back for a proof copy, which is worth running
  * on plain paper and holding against the form before committing a real one.
+ *
+ * ── The crop ────────────────────────────────────────────────────────────────
+ * A scan carries white margin the real form does not have, so PDF Mapper stores
+ * a crop window and the exported page is that window rather than the whole
+ * scan. Field positions stay in original page space and are translated by the
+ * crop origin here, on the way out — see pdfCrop.ts for why that is the only
+ * arrangement where changing the crop does not invalidate a mapping.
  */
 
 import { PDFDocument, StandardFonts, type PDFPage } from "pdf-lib";
@@ -37,7 +44,7 @@ import {
   downloadPdf, drawImageField, flowParagraphs, safeFilename, stampFields,
   type FieldValues,
 } from "./pdfDraw";
-import { fetchAllMappings, fetchTemplateImage, mappingsForForm } from "./pdfTemplates";
+import { cropForForm, fetchAllMappings, fetchTemplateImage, mappingsForForm } from "./pdfTemplates";
 import { formFieldIds, getForm, templateImageName } from "./pdfForms";
 import { ID407_IMAGE_FIELDS, buildId407Values, type ContractApplicant } from "./id407";
 import type { Contract } from "./contracts";
@@ -65,7 +72,7 @@ export async function exportContractPdf(
   const includeTemplate = opts.includeTemplate ?? false;
 
   // 1. Positions, and the booklet sheets only if they are going to be drawn
-  const [{ rows, defaultSize }, images] = await Promise.all([
+  const [{ rows, defaultSize, crops }, images] = await Promise.all([
     fetchAllMappings(),
     includeTemplate
       ? Promise.all(Array.from({ length: ID407.pages }, (_, i) =>
@@ -73,11 +80,15 @@ export async function exportContractPdf(
       : Promise.resolve([] as Uint8Array[]),
   ]);
 
-  // Per-contract box moves win over the shared mapping. Applied here, before
-  // anything measures or stamps, so the whole pipeline sees one set of boxes.
+  const crop = cropForForm(crops, ID407.id, ID407.width, ID407.height);
+
+  // Per-contract box moves win over the shared mapping, then everything shifts
+  // into the crop's space. Both applied here, before anything measures or
+  // stamps, so the whole pipeline downstream sees one set of boxes on one page.
   const moved = contract.field_positions ?? {};
   const mappings = mappingsForForm(rows, formFieldIds(ID407))
-    .map(m => (moved[m.field_id] ? { ...m, ...moved[m.field_id] } : m));
+    .map(m => (moved[m.field_id] ? { ...m, ...moved[m.field_id] } : m))
+    .map(m => ({ ...m, x: m.x - crop.x, y: m.y - crop.y }));
   if (!mappings.length) {
     throw new Error(
       "No ID 407 field positions have been set yet. Open PDF Mapper, switch the " +
@@ -85,19 +96,27 @@ export async function exportContractPdf(
     );
   }
 
-  // 2. A page per sheet, at the template's exact size whether or not the scan
-  //    is drawn behind it. Built from the form's page count rather than from the
-  //    images, so an overlay still has a page for every sheet — and a missing
-  //    template can no longer silently drop the fields belonging to one.
+  // 2. A page per sheet, sized to the crop whether or not the scan is drawn
+  //    behind it. Built from the form's page count rather than from the images,
+  //    so an overlay still has a page for every sheet — and a missing template
+  //    can no longer silently drop the fields belonging to one.
   const pdfDoc = await PDFDocument.create();
   const font   = await pdfDoc.embedFont(StandardFonts.Helvetica);
   const pages: PDFPage[] = [];
   for (let i = 0; i < ID407.pages; i++) {
-    const page = pdfDoc.addPage([ID407.width, ID407.height]);
+    const page = pdfDoc.addPage([crop.w, crop.h]);
     const bytes = images[i];
     if (bytes) {
       const img = await pdfDoc.embedPng(bytes);
-      page.drawImage(img, { x: 0, y: 0, width: ID407.width, height: ID407.height });
+      // The scan is drawn at full size and pushed so the crop window lands on
+      // the page; everything outside it falls off the edges. pdf-lib measures
+      // from the bottom left, hence the y rather than a plain -crop.y.
+      page.drawImage(img, {
+        x: -crop.x,
+        y: crop.y + crop.h - ID407.height,
+        width:  ID407.width,
+        height: ID407.height,
+      });
     }
     pages.push(page);
   }
@@ -130,14 +149,14 @@ export async function exportContractPdf(
       const m   = mappings.find(x => x.field_id === id);
       const page = m ? pages[m.page - 1] : undefined;
       if (!url || !m || !page) return [];
-      return [drawImageField(pdfDoc, page, m, url, ID407.height, "contain")];
+      return [drawImageField(pdfDoc, page, m, url, crop.h, "contain")];
     })
   );
 
   // 5. Stamp the rest and hand it over
   stampFields({
     pages, mappings, values, font,
-    pageHeight: ID407.height, defaultSize, sizeOverrides,
+    pageHeight: crop.h, defaultSize, sizeOverrides,
     keepUnitFields: new Set(ID407.unitFields ?? []),
     leftAlignFields: new Set(ID407.paragraphs.flat()),
   });
