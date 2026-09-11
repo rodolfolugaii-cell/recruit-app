@@ -19,7 +19,11 @@ import {
   createContract, fetchContractForApplicant, placeOfOriginFor, signingLink,
   type Contract,
 } from "@/lib/contracts";
-import ContractSheetEditor from "@/components/ContractSheetEditor";
+import ContractSheetEditor, { type SheetApplicant } from "@/components/ContractSheetEditor";
+import { buildId407Values } from "@/lib/id407";
+import { buildId988aValues } from "@/lib/id988a";
+import { exportContractPdf, type ContractExportOptions } from "@/lib/exportContractPdf";
+import { exportId988aPdf } from "@/lib/exportId988aPdf";
 import type { Employer } from "@/lib/employers";
 
 interface WorkExperienceEntry {
@@ -237,7 +241,7 @@ export default function ForReviewDashboard() {
   // The contract sheet is a second view of the same applicant rather than a
   // separate page, because the reason to open it is always "does this person's
   // contract read right", which is a biodata question first.
-  const [profileTab, setProfileTab] = useState<"biodata" | "contract">("biodata");
+  const [profileTab, setProfileTab] = useState<"biodata" | "contract" | "visa">("biodata");
   const [contract, setContract]     = useState<Contract | null>(null);
   const [contractLoaded, setContractLoaded] = useState(false);
   // Set from the employer dropdown: the sheet stands in for the employer form
@@ -482,6 +486,31 @@ Both links, the terms and the witnesses are on the Contracts page.`
         + (e instanceof Error ? e.message : String(e)));
     }
   }, [selectedApplicant, handleEmployerAssigned, addEmployer]);
+
+  /* ── Which sheet the contract tab is showing ── */
+  // The two forms share this view; only the field set, the value builder and
+  // the export differ. Memoised so the sheet's own useMemo actually holds.
+  const isVisaTab = profileTab === "visa";
+
+  const sheetBuildValues = useCallback(
+    (a: SheetApplicant, e: Employer | null, c: Contract | null) =>
+      isVisaTab
+        ? buildId988aValues(a, e, c)
+        : buildId407Values(
+            { full_name: a.full_name, nationality: a.nationality ?? null, signature_url: a.signature_url },
+            e, c ?? ({ terms: {} } as Contract)),
+    [isVisaTab],
+  );
+
+  const sheetExport = useCallback(
+    (a: SheetApplicant, e: Employer | null, c: Contract, o: ContractExportOptions) =>
+      isVisaTab
+        ? exportId988aPdf(a, e, c, o)
+        : exportContractPdf(
+            { full_name: a.full_name, nationality: a.nationality ?? null, signature_url: a.signature_url },
+            e, c, o),
+    [isVisaTab],
+  );
 
   /* ── Required documents ── */
   // DocumentChecklist has already written the change (and rolls itself back if
@@ -916,6 +945,7 @@ Both links, the terms and the witnesses are on the Contracts page.`
                 {([
                   ["biodata",  "Biodata"],
                   ["contract", "ID 407 Contract"],
+                  ["visa",     "ID 988A Visa"],
                 ] as const).map(([key, label]) => (
                   <button
                     key={key}
@@ -927,7 +957,7 @@ Both links, the terms and the witnesses are on the Contracts page.`
                     }`}
                   >
                     {label}
-                    {key === "contract" && contractLoaded && !contract && (
+                    {(key === "contract" || key === "visa") && contractLoaded && !contract && (
                       <span className="ml-1.5 text-[10px] font-normal text-amber-500">not started</span>
                     )}
                   </button>
@@ -942,15 +972,27 @@ Both links, the terms and the witnesses are on the Contracts page.`
                 onCancel={() => setEditing(false)}
                 onSaved={handleApplicantSaved}
               />
-            ) : profileTab === "contract" ? (
+            ) : profileTab === "contract" || profileTab === "visa" ? (
               !contractLoaded
                 ? <div className="p-10 text-center text-sm text-gray-400">Loading contract…</div>
                 : <ContractSheetEditor
-                    key={contract?.id ?? "no-contract"}
+                    // Remounting on a form switch is deliberate: zoom, page and
+                    // any half-finished edit belong to the sheet being left.
+                    key={`${profileTab}-${contract?.id ?? "none"}`}
+                    formId={isVisaTab ? "id988a" : "id407"}
+                    buildValues={sheetBuildValues}
+                    exportSheet={sheetExport}
+                    // The visa form asks about the helper herself, so it needs
+                    // more of her record than the contract sheet ever did.
                     applicant={{
                       full_name:     selectedApplicant.full_name,
                       nationality:   selectedApplicant.nationality,
                       signature_url: selectedApplicant.signature_url,
+                      date_of_birth: selectedApplicant.date_of_birth,
+                      gender:        selectedApplicant.gender,
+                      mobile:        selectedApplicant.mobile,
+                      photo_url:     selectedApplicant.photo_url,
+                      form_data:     selectedApplicant.form_data,
                     }}
                     employer={selectedApplicant.employer_id
                       ? employersById.get(selectedApplicant.employer_id) ?? null
@@ -960,7 +1002,9 @@ Both links, the terms and the witnesses are on the Contracts page.`
                     creating={creatingContract}
                     canCreate={!!selectedApplicant.employer_id}
                     onContractSaved={setContract}
-                    newEmployerMode={newEmployerMode}
+                    // Capturing a household off the sheet is an ID 407 feature;
+                    // ID 988A carries none of those details.
+                    newEmployerMode={profileTab === "contract" && newEmployerMode}
                     onEmployerCreated={handleEmployerCreated}
                     onCancelNewEmployer={() => setNewEmployerMode(false)}
                   />

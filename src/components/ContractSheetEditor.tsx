@@ -32,36 +32,46 @@ import {
 import { formFieldIds, getForm, templateImageName } from "@/lib/pdfForms";
 import { cropForForm } from "@/lib/pdfTemplates";
 import { fullPageCrop, type Crop } from "@/lib/pdfCrop";
-import { buildId407Values, type ContractApplicant } from "@/lib/id407";
+import type { Id988aApplicant } from "@/lib/id988a";
 import { sizeFor, type FieldMapping } from "@/lib/pdfDraw";
 import {
   saveContractFieldEdits, needsFieldEditsMigration,
   type Contract, type FieldOverrides, type FieldPositions,
 } from "@/lib/contracts";
-import { exportContractPdf, type ContractExportOptions } from "@/lib/exportContractPdf";
+import { type ContractExportOptions } from "@/lib/exportContractPdf";
 import {
   EMPLOYER_FIELD_SET, EMPLOYER_CHECK_FIELDS, employerFromSheet,
   employerSheetGaps, partnerOf,
 } from "@/lib/id407Employer";
 import { createEmployer, type Employer } from "@/lib/employers";
 
-const ID407  = getForm("id407");
-const PDF_W  = ID407.width;
-const PDF_H  = ID407.height;
-const PAGES  = Array.from({ length: ID407.pages }, (_, i) => i + 1);
+/**
+ * Everything about the sheet that differs between forms, worked out once per
+ * form id. The editor itself is identical for ID 407 and ID 988A — only the
+ * field set, the page size and the value builder change.
+ */
+function formFacts(formId: string) {
+  const form = getForm(formId);
+  return {
+    form,
+    PDF_W: form.width,
+    PDF_H: form.height,
+    PAGES: Array.from({ length: form.pages }, (_, i) => i + 1),
+    FIELD_TYPES: Object.fromEntries(
+      form.sections.flatMap(sec => sec.fields.map(f => [f.id, f.type])),
+    ) as Record<string, string>,
+    FIELD_LABELS: Object.fromEntries(
+      form.sections.flatMap(sec => sec.fields.map(f => [f.id, f.label])),
+    ) as Record<string, string>,
+    /** Lines that flow as one paragraph, so the editor can say so. */
+    PARAGRAPH_OF: Object.fromEntries(
+      form.paragraphs.flatMap(ids => ids.map(id => [id, ids])),
+    ) as Record<string, string[]>,
+  };
+}
 
-/** Every field id belonging to this form, with its declared type. */
-const FIELD_TYPES: Record<string, string> = Object.fromEntries(
-  ID407.sections.flatMap(sec => sec.fields.map(f => [f.id, f.type])),
-);
-const FIELD_LABELS: Record<string, string> = Object.fromEntries(
-  ID407.sections.flatMap(sec => sec.fields.map(f => [f.id, f.label])),
-);
-
-/** Lines that flow as one paragraph, so the editor can say so. */
-const PARAGRAPH_OF: Record<string, string[]> = Object.fromEntries(
-  ID407.paragraphs.flatMap(ids => ids.map(id => [id, ids])),
-);
+/** The applicant fields any sheet might ask about — a superset of both forms. */
+export type SheetApplicant = Id988aApplicant;
 
 /** Same ladder as PDF Mapper, carried up to 500% — this view is where a box is
  *  judged against a printed rule, and that needs more magnification than placing
@@ -72,6 +82,9 @@ type MoveState = { id: string; x: number; y: number } | null;
 type CtxMenu   = { id: string; x: number; y: number } | null;
 
 export default function ContractSheetEditor({
+  formId,
+  buildValues,
+  exportSheet,
   applicant,
   employer,
   contract,
@@ -83,7 +96,11 @@ export default function ContractSheetEditor({
   onEmployerCreated,
   onCancelNewEmployer,
 }: {
-  applicant: ContractApplicant;
+  /** Which form this sheet is — "id407" or "id988a". */
+  formId: string;
+  buildValues: (a: SheetApplicant, e: Employer | null, c: Contract | null) => Record<string, string | boolean | undefined>;
+  exportSheet: (a: SheetApplicant, e: Employer | null, c: Contract, opts: ContractExportOptions) => Promise<void>;
+  applicant: SheetApplicant;
   employer: Employer | null;
   contract: Contract | null;
   onCreateContract: () => void;
@@ -91,11 +108,16 @@ export default function ContractSheetEditor({
   /** False until an employer is assigned — a contract needs one to be against. */
   canCreate: boolean;
   onContractSaved: (c: Contract) => void;
-  /** Describe a brand-new employer by typing onto the sheet itself. */
+  /**
+   * Describe a brand-new employer by typing onto the sheet itself. Only ID 407
+   * carries the household details, so only that sheet offers it.
+   */
   newEmployerMode: boolean;
   onEmployerCreated: (e: Employer) => void;
   onCancelNewEmployer: () => void;
 }) {
+  const { form, PDF_W, PDF_H, PAGES, FIELD_TYPES, FIELD_LABELS, PARAGRAPH_OF } =
+    useMemo(() => formFacts(formId), [formId]);
   const [mappings, setMappings] = useState<FieldMapping[]>([]);
   const [defaultSize, setDefaultSize] = useState(8);
   const [images, setImages] = useState<Record<number, string>>({});
@@ -146,16 +168,16 @@ export default function ContractSheetEditor({
       try {
         const { rows, defaultSize: ds, crops } = await fetchAllMappings();
         if (cancelled) return;
-        setMappings(mappingsForForm(rows, formFieldIds(ID407)));
+        setMappings(mappingsForForm(rows, formFieldIds(form)));
         setDefaultSize(ds);
         // The same window the mapper set and the export will use
-        setCrop(cropForForm(crops, ID407.id, PDF_W, PDF_H));
+        setCrop(cropForForm(crops, form.id, PDF_W, PDF_H));
 
         const urls: Record<number, string> = {};
         for (const p of PAGES) {
           const { data } = supabase.storage
             .from(TEMPLATE_BUCKET)
-            .getPublicUrl(templateImageName(ID407, p));
+            .getPublicUrl(templateImageName(form, p));
           urls[p] = data.publicUrl;
         }
         if (!cancelled) setImages(urls);
@@ -166,7 +188,7 @@ export default function ContractSheetEditor({
       }
     })();
     return () => { cancelled = true; };
-  }, []);
+  }, [form, PAGES, PDF_W, PDF_H]);
 
   /* ── Track the container width so text can be sized in real points ───────── */
   useEffect(() => {
@@ -193,8 +215,8 @@ export default function ContractSheetEditor({
     // Describing a new employer starts from an empty household, not from
     // whoever happened to be assigned before
     const src = newEmployerMode ? null : employer;
-    return buildId407Values(applicant, src, contract ?? stub);
-  }, [applicant, employer, contract, newEmployerMode]);
+    return buildValues(applicant, src, contract ?? stub);
+  }, [applicant, employer, contract, newEmployerMode, buildValues]);
 
   const valueOf = useCallback((id: string): string => {
     const v = overrides[id] ?? computed[id];
@@ -341,7 +363,7 @@ export default function ContractSheetEditor({
     };
     document.addEventListener("mousemove", onMouseMove);
     document.addEventListener("mouseup", onMouseUp);
-  }, [move]);
+  }, [move, PDF_W, PDF_H]);
 
   /* ── Keys: arrows nudge a move, Escape backs out of whatever is open ─────── */
   useEffect(() => {
@@ -369,7 +391,7 @@ export default function ContractSheetEditor({
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [move, editingId, ctxMenu, cancelEdit, cancelMove]);
+  }, [move, editingId, ctxMenu, cancelEdit, cancelMove, PDF_W, PDF_H]);
 
   /* ── Saving ──────────────────────────────────────────────────────────────── */
   /** Write the pending edits and hand back the saved record. */
@@ -414,13 +436,13 @@ export default function ContractSheetEditor({
     try {
       const fresh = await persist();
       if (!fresh) return;
-      await exportContractPdf(applicant, employer, fresh, opts);
+      await exportSheet(applicant, employer, fresh, opts);
     } catch (e) {
       setSaveError(describeError(e));
     } finally {
       setExporting(null);
     }
-  }, [persist, applicant, employer]);
+  }, [persist, applicant, employer, exportSheet]);
 
   /**
    * Save the household described on the sheet as a new employer.
@@ -646,11 +668,11 @@ export default function ContractSheetEditor({
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={images[page]}
-          alt={`ID 407 sheet ${page}`}
+          alt={`${form.label} sheet ${page}`}
           className="w-full block"
           draggable={false}
           onError={() => setLoadError(
-            `The ID 407 template page "${templateImageName(ID407, page)}" is missing. ` +
+            `The ${form.label} template page "${templateImageName(form, page)}" is missing. ` +
             `Upload it in PDF Mapper → Upload PDF.`
           )}
         />
@@ -796,6 +818,7 @@ export default function ContractSheetEditor({
               className="border-2 border-blue-500 bg-white text-center text-gray-900 px-0 outline-none rounded-none"
             />
             <FloatingChip
+              pageW={PDF_W} pageH={PDF_H}
               box={editingBox}
               label={FIELD_LABELS[editingId!] ?? editingId!}
               note={PARAGRAPH_OF[editingId!]
@@ -810,6 +833,7 @@ export default function ContractSheetEditor({
         {/* ── Move chip, following the box ── */}
         {move && (
           <FloatingChip
+              pageW={PDF_W} pageH={PDF_H}
             box={{ ...boxOf(mappings.find(m => m.field_id === move.id)!), x: move.x, y: move.y }}
             label={`${FIELD_LABELS[move.id] ?? move.id} — ${move.x}, ${move.y}`}
             onApply={applyMove}
@@ -866,26 +890,29 @@ export default function ContractSheetEditor({
  * so the controls never land off the sheet.
  */
 function FloatingChip({
-  box, label, note, onApply, onCancel,
+  box, label, note, onApply, onCancel, pageW, pageH,
 }: {
   box: FieldMapping;
   label: string;
   note?: string;
   onApply: () => void;
   onCancel: () => void;
+  /** The chip anchors against the page edge, and the two forms differ in size. */
+  pageW: number;
+  pageH: number;
 }) {
-  const below = box.y + box.h < PDF_H - 70;
+  const below = box.y + box.h < pageH - 70;
   return (
     <div
       style={{
         position: "absolute",
-        left: `${(box.x / PDF_W) * 100}%`,
+        left: `${(box.x / pageW) * 100}%`,
         top: below
-          ? `${((box.y + box.h + 4) / PDF_H) * 100}%`
+          ? `${((box.y + box.h + 4) / pageH) * 100}%`
           : undefined,
         bottom: below
           ? undefined
-          : `${((PDF_H - box.y + 4) / PDF_H) * 100}%`,
+          : `${((pageH - box.y + 4) / pageH) * 100}%`,
         zIndex: 50,
       }}
       onMouseDown={e => e.stopPropagation()}

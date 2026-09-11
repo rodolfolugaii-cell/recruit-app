@@ -325,6 +325,24 @@ export default function PdfMapper() {
         });
         setCrops(loadedCrops);
 
+        // A form measured off its scan ships approximate positions. Fill only
+        // the gaps, so a box someone has already placed is never moved.
+        FORMS.forEach(f => {
+          if (!f.defaultPositions) return;
+          const dims = (id: string) => getDefaultDims(f, id);
+          const look = fieldLookup(f);
+          Object.entries(f.defaultPositions).forEach(([id, pos]) => {
+            if (map[id]) return;
+            const def = look[id];
+            if (!def) return;
+            const d = dims(id);
+            map[id] = {
+              field_id: id, label: def.label, field_type: def.type,
+              page: pos.page, x: pos.x, y: pos.y, w: d.w, h: d.h, font_size: null,
+            };
+          });
+        });
+
         // Carry retired ids onto their replacement, then drop them from view
         let carried = 0;
         Object.entries(form.retired).forEach(([oldId, newId]) => {
