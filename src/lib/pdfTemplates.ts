@@ -95,11 +95,6 @@ export async function fetchCrop(formId: string, width: number, height: number): 
   return normaliseCrop(data as Partial<Crop> | null, width, height);
 }
 
-/** Only the fields belonging to one form, so nothing bleeds between templates. */
-export function mappingsForForm(rows: FieldMapping[], ids: Set<string>): FieldMapping[] {
-  return rows.filter(m => ids.has(m.field_id));
-}
-
 /** One page image from the template bucket. */
 export async function fetchTemplateImage(name: string, formLabel: string): Promise<Uint8Array> {
   const cached = _imgCache.get(name);

@@ -31,6 +31,7 @@ import type { Contract } from "./contracts";
 import type { Employer } from "./employers";
 import type { FieldDef, FormSection } from "./pdfForms";
 import { formDate } from "./formDates";
+import { combCellId, combCellPosition, type CombSpec } from "./pdfCombs";
 
 /** Measured from the supplied scan, not assumed. */
 export const ID988A_PAGE_W = 1222;
@@ -45,6 +46,28 @@ export const ID988A_PARAGRAPHS: string[][] = [
   ["id988a_refused_details_1",  "id988a_refused_details_2"],
   ["id988a_convicted_details_1","id988a_convicted_details_2"],
 ];
+
+/**
+ * The two name rows are printed as a row of little squares, one per letter, so
+ * they are mapped that way. Measured off the scan: the first cell starts at
+ * x 143 and they repeat every 23.9pt across to the right-hand rule.
+ */
+export const ID988A_COMBS: CombSpec[] = [
+  { base: "id988a_surname",     label: "Surname in English",
+    page: 1, x: 143, y: 440, w: 22, h: 16, pitch: 23.9, count: 19 },
+  { base: "id988a_given_names", label: "Given names in English",
+    page: 1, x: 143, y: 471, w: 22, h: 16, pitch: 23.9, count: 19 },
+];
+
+/** Every cell of a comb, as fields the mapper can place individually. */
+const combFields = (spec: CombSpec): FieldDef[] =>
+  Array.from({ length: spec.count }, (_, i) => ({
+    id: combCellId(spec.base, i + 1),
+    label: `${spec.label} — box ${i + 1}`,
+    type: "text" as const,
+    defaultW: spec.w,
+    defaultH: spec.h,
+  }));
 
 /** A dd / mm / yyyy trio, which this form uses in five places. */
 const dateCells = (prefix: string, label: string): FieldDef[] => [
@@ -71,8 +94,9 @@ export const ID988A_SECTIONS: FormSection[] = [
       { id: "id988a_type_renew_defer",  label: "1(b)(ii) Renewal — deferring leave",  type: "checkbox" },
       { id: "id988a_type_extension",    label: "1(c) Extension of stay",              type: "checkbox" },
 
-      { id: "id988a_surname",        label: "Surname in English",     type: "text", defaultW: 368 },
-      { id: "id988a_given_names",    label: "Given names in English", type: "text", defaultW: 368 },
+      // One box per letter, as the form prints them
+      ...combFields(ID988A_COMBS[0]),
+      ...combFields(ID988A_COMBS[1]),
       { id: "id988a_maiden_surname", label: "Maiden surname",         type: "text", defaultW: 42  },
       { id: "id988a_name_chinese",   label: "Name in Chinese",        type: "text", defaultW: 140 },
       { id: "id988a_alias",          label: "Alias (if any)",         type: "text", defaultW: 450 },
@@ -193,8 +217,6 @@ export const ID988A_DEFAULT_POSITIONS: Record<string, { page: number; x: number;
   id988a_type_renew_defer: { page: 1, x: 478, y: 352 },
   id988a_type_extension:   { page: 1, x: 478, y: 386 },
 
-  id988a_surname:        { page: 1, x: 232, y: 443 },
-  id988a_given_names:    { page: 1, x: 232, y: 473 },
   id988a_maiden_surname: { page: 1, x: 291, y: 506 },
   id988a_name_chinese:   { page: 1, x: 458, y: 506 },
   id988a_alias:          { page: 1, x: 150, y: 536 },
@@ -314,6 +336,13 @@ export const ID988A_DEFAULT_POSITIONS: Record<string, { page: number; x: number;
   id988a_p4_date:        { page: 2, x: 690, y: 793 },
   id988a_p4_sig:         { page: 2, x: 940, y: 772 },
 };
+
+// Each comb cell starts on its own square, stepping across by the measured pitch
+ID988A_COMBS.forEach(spec => {
+  for (let n = 1; n <= spec.count; n++) {
+    ID988A_DEFAULT_POSITIONS[combCellId(spec.base, n)] = combCellPosition(spec, n);
+  }
+});
 
 /** Signatures and the photograph, drawn from a URL rather than stamped as text. */
 export const ID988A_IMAGE_FIELDS: {

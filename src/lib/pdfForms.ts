@@ -14,9 +14,10 @@
 
 import { ID407_PAGE_H, ID407_PAGE_W, ID407_PARAGRAPHS, ID407_SECTIONS } from "./id407";
 import {
-  ID988A_DEFAULT_POSITIONS, ID988A_PAGE_H, ID988A_PAGE_W,
+  ID988A_COMBS, ID988A_DEFAULT_POSITIONS, ID988A_PAGE_H, ID988A_PAGE_W,
   ID988A_PARAGRAPHS, ID988A_SECTIONS,
 } from "./id988a";
+import { isCombCellOf, type CombSpec } from "./pdfCombs";
 
 export type FieldType = "text" | "checkbox" | "date" | "image" | "signature";
 
@@ -67,6 +68,12 @@ export interface FormDef {
    * hundred of them. Only fills gaps — a saved position always wins.
    */
   defaultPositions?: Record<string, { page: number; x: number; y: number }>;
+  /**
+   * Fields the form prints as one box per letter. Their cells can be added to
+   * and removed from in PDF Mapper, so the declared list is a starting point
+   * rather than the whole set — see formOwnsField().
+   */
+  combs?: CombSpec[];
   /** Shown under the form picker. */
   note?: string;
 }
@@ -323,6 +330,7 @@ FORMS.push({
   paragraphs: ID988A_PARAGRAPHS,
   retired: {},
   defaultPositions: ID988A_DEFAULT_POSITIONS,
+  combs: ID988A_COMBS,
   note: "Sheet 1 is form pages 1 | 2, sheet 2 is pages 3 | 4. Positions are measured off the scan — nudge and Save All.",
 });
 
@@ -353,6 +361,29 @@ export function getDefaultDims(form: FormDef, id: string): { w: number; h: numbe
 /** The set of ids belonging to a form — used to filter the shared mapping table. */
 export function formFieldIds(form: FormDef): Set<string> {
   return new Set(form.sections.flatMap(s => s.fields.map(f => f.id)));
+}
+
+/** The base ids of this form's boxed-letter fields. */
+export function combBases(form: FormDef): Set<string> {
+  return new Set((form.combs ?? []).map(c => c.base));
+}
+
+/**
+ * Does this row belong to the form?
+ *
+ * Not simply "is it in the declared set": a comb cell added in PDF Mapper is a
+ * real row with an id the form never listed, and dropping it would silently
+ * lose a letter of someone's name.
+ */
+export function formOwnsField(form: FormDef, fieldId: string): boolean {
+  return formFieldIds(form).has(fieldId) || isCombCellOf(fieldId, combBases(form));
+}
+
+/** Only the rows belonging to one form, comb cells included. */
+export function mappingsForFormDef<T extends { field_id: string }>(rows: T[], form: FormDef): T[] {
+  const declared = formFieldIds(form);
+  const bases    = combBases(form);
+  return rows.filter(m => declared.has(m.field_id) || isCombCellOf(m.field_id, bases));
 }
 
 /** Storage object name for one page of a form's template. */

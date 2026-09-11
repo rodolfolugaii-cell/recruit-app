@@ -27,9 +27,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import {
-  fetchAllMappings, mappingsForForm, resetPdfTemplateCache, TEMPLATE_BUCKET,
+  fetchAllMappings, resetPdfTemplateCache, TEMPLATE_BUCKET,
 } from "@/lib/pdfTemplates";
-import { formFieldIds, getForm, templateImageName } from "@/lib/pdfForms";
+import { getForm, mappingsForFormDef, templateImageName } from "@/lib/pdfForms";
 import { cropForForm } from "@/lib/pdfTemplates";
 import { fullPageCrop, type Crop } from "@/lib/pdfCrop";
 import type { Id988aApplicant } from "@/lib/id988a";
@@ -168,7 +168,7 @@ export default function ContractSheetEditor({
       try {
         const { rows, defaultSize: ds, crops } = await fetchAllMappings();
         if (cancelled) return;
-        setMappings(mappingsForForm(rows, formFieldIds(form)));
+        setMappings(mappingsForFormDef(rows, form));
         setDefaultSize(ds);
         // The same window the mapper set and the export will use
         setCrop(cropForForm(crops, form.id, PDF_W, PDF_H));

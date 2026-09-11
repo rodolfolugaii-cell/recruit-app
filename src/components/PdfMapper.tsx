@@ -32,9 +32,10 @@ import {
   TICK_LEFT_DX, TICK_LEFT_DY, TICK_RIGHT_DX, TICK_RIGHT_DY,
 } from "@/lib/pdfDraw";
 import {
-  DEFAULT_FORM_ID, FORMS, fieldLookup, formFieldIds, getDefaultDims, getForm,
+  DEFAULT_FORM_ID, FORMS, fieldLookup, formOwnsField, getDefaultDims, getForm,
   templateImageName, type FieldType, type FormDef,
 } from "@/lib/pdfForms";
+import { combCellId, parseCombCell } from "@/lib/pdfCombs";
 
 const BUCKET = "pdf-templates";
 
@@ -186,12 +187,15 @@ export default function PdfMapper() {
   const dimsFor      = useCallback((id: string) => getDefaultDims(form, id), [form]);
   // pdf_field_mappings holds every form's rows. Without this the biodata's 157
   // boxes would all draw on top of ID 407 sheet 1, since both call it page 1.
-  const FORM_IDS     = useMemo(() => formFieldIds(form), [form]);
+  // Comb cells added here are owned too, though the form never declared them.
+  const ownsField = useCallback((id: string) => formOwnsField(form, id), [form]);
 
   // The crop window per form, as loaded and as edited. Field positions stay in
   // full-page space, so changing this never moves a box relative to the form —
   // see pdfCrop.ts.
   const [crops, setCrops] = useState<Record<string, Crop>>({});
+  // Right-click menu over a placed box, for growing a comb one cell at a time
+  const [ctxMenu, setCtxMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   const crop = crops[form.id] ?? fullPageCrop(PDF_W, PDF_H);
   const margins = cropToMargins(crop, PDF_W, PDF_H);
   const cropped = !isFullPage(crop, PDF_W, PDF_H);
@@ -621,6 +625,59 @@ export default function PdfMapper() {
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [selectedId, currentPage, PDF_W, PDF_H]);
 
+  /* ── Growing a comb ──────────────────────────────────────────────────────
+     The printed form has a fixed number of little squares, but a scan can be
+     miscounted and another form may want more. Adding steps one pitch to the
+     right of the box you right-clicked, so a comb is built by repeating the
+     same gesture rather than by placing each square from scratch. */
+  const combOf = useCallback((fieldId: string) => {
+    const cell = parseCombCell(fieldId);
+    if (!cell) return null;
+    const spec = form.combs?.find(c => c.base === cell.base);
+    return spec ? { spec, n: cell.n } : null;
+  }, [form]);
+
+  const addCombBox = useCallback((fieldId: string) => {
+    const found = combOf(fieldId);
+    if (!found) return;
+    const { spec } = found;
+    const from = mappings[fieldId];
+    if (!from) return;
+
+    // The next free number, so removing from the middle never collides
+    let next = 1;
+    Object.keys(mappings).forEach(id => {
+      const c = parseCombCell(id);
+      if (c?.base === spec.base && c.n >= next) next = c.n + 1;
+    });
+    const id = combCellId(spec.base, next);
+
+    setMappings(p => ({
+      ...p,
+      [id]: {
+        field_id: id,
+        label: `${spec.label} — box ${next}`,
+        field_type: "text",
+        page: from.page,
+        x: parseFloat((from.x + spec.pitch).toFixed(1)),
+        y: from.y,
+        w: from.w,
+        h: from.h,
+        font_size: from.font_size ?? null,
+      },
+    }));
+    setSelectedId(id);
+    showMsg(`Added ${spec.label} box ${next} — drag it into place, then Save All.`);
+  }, [combOf, mappings]);
+
+  const removeCombBox = useCallback((fieldId: string) => {
+    const found = combOf(fieldId);
+    if (!found) return;
+    setMappings(p => { const n = { ...p }; delete n[fieldId]; return n; });
+    if (selectedId === fieldId) setSelectedId(null);
+    showMsg(`Removed ${found.spec.label} box ${found.n}. Save All to keep the change.`);
+  }, [combOf, selectedId]);
+
   // ── Save mappings to Supabase ────────────────────────────────────────────────
   const handleSave = async () => {
     const rows = Object.values(mappings)
@@ -711,7 +768,7 @@ export default function PdfMapper() {
   const handleDownloadJSON = () => {
     // Only this form's rows: page_width_pts below describes one form, so mixing
     // both in a file would make the exported coordinates meaningless.
-    const rows = Object.values(mappings).filter(m => FORM_IDS.has(m.field_id));
+    const rows = Object.values(mappings).filter(m => ownsField(m.field_id));
     if (!rows.length) { showMsg(`No ${form.label} mappings to download yet.`); return; }
 
     const payload = {
@@ -840,6 +897,53 @@ export default function PdfMapper() {
         </div>
         {form.note && <span className="text-xs text-slate-400">{form.note}</span>}
       </div>
+
+      {/* ── Right-click menu ───────────────────────────────────────────────
+          A backdrop catches the next click anywhere, so the menu closes the
+          way every other menu does rather than lingering over the page. */}
+      {ctxMenu && (
+        <>
+          <div className="fixed inset-0 z-40"
+               onMouseDown={() => setCtxMenu(null)}
+               onContextMenu={e => { e.preventDefault(); setCtxMenu(null); }} />
+          <div
+            className="fixed z-50 min-w-[190px] rounded-lg border border-slate-200 bg-white shadow-lg py-1 text-xs"
+            style={{ left: ctxMenu.x, top: ctxMenu.y }}
+            onMouseDown={e => e.stopPropagation()}
+          >
+            <p className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-400 truncate">
+              {FIELD_LOOKUP[ctxMenu.id]?.label ?? ctxMenu.id}
+            </p>
+            {combOf(ctxMenu.id) ? (
+              <>
+                <button
+                  onClick={() => { addCombBox(ctxMenu.id); setCtxMenu(null); }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-slate-100 text-slate-700"
+                >
+                  Add box
+                </button>
+                <button
+                  onClick={() => { removeCombBox(ctxMenu.id); setCtxMenu(null); }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-slate-100 text-slate-700"
+                >
+                  Remove this box
+                </button>
+              </>
+            ) : (
+              <p className="px-3 py-1.5 text-slate-400">
+                Only a one-letter box can be added to.
+              </p>
+            )}
+            <div className="my-1 border-t border-slate-100" />
+            <button
+              onClick={() => { clearMapping(ctxMenu.id); setCtxMenu(null); }}
+              className="w-full text-left px-3 py-1.5 hover:bg-red-50 text-red-600"
+            >
+              Clear this mapping
+            </button>
+          </div>
+        </>
+      )}
 
       {form.generated ? (
         <div className="p-8 rounded-xl border border-dashed border-gray-300 bg-white">
@@ -1069,7 +1173,7 @@ export default function PdfMapper() {
                 <div ref={overlayRef} onClick={handleOverlayClick}
                   className={`absolute inset-0 ${selectedId ? "cursor-crosshair" : "cursor-default"}`}>
                   {Object.values(mappings)
-                    .filter(m => m.page === currentPage && FORM_IDS.has(m.field_id))
+                    .filter(m => m.page === currentPage && ownsField(m.field_id))
                     .map(m => {
                     const tk = (m.field_type in TYPE_STYLE ? m.field_type : "text") as FieldType;
                     const { bg, border } = TYPE_STYLE[tk];
@@ -1092,8 +1196,15 @@ export default function PdfMapper() {
                         ref={el => { markerRefs.current[m.field_id] = el; }}
                         title={`${m.field_id} — ${m.label}${isTxt ? `\nText size: ${effSize(m)}pt${m.font_size ? "" : " (default)"}` : ""}\nDrag to reposition`}
                         onMouseDown={e => handleMarkerMouseDown(e, m.field_id)}
+                        onContextMenu={e => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setSelectedId(m.field_id);
+                          setCtxMenu({ id: m.field_id, x: e.clientX, y: e.clientY });
+                        }}
                         onClick={e => {
                           e.stopPropagation();
+                          setCtxMenu(null);
                           setSelectedId(m.field_id);
                           fieldRefs.current[m.field_id]?.scrollIntoView({ behavior: "smooth", block: "nearest" });
                         }}

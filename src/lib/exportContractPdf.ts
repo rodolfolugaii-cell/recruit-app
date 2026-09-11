@@ -44,8 +44,8 @@ import {
   downloadPdf, drawImageField, flowParagraphs, safeFilename, stampFields,
   type FieldValues,
 } from "./pdfDraw";
-import { cropForForm, fetchAllMappings, fetchTemplateImage, mappingsForForm } from "./pdfTemplates";
-import { formFieldIds, getForm, templateImageName } from "./pdfForms";
+import { cropForForm, fetchAllMappings, fetchTemplateImage } from "./pdfTemplates";
+import { getForm, mappingsForFormDef, templateImageName } from "./pdfForms";
 import { ID407_IMAGE_FIELDS, buildId407Values, type ContractApplicant } from "./id407";
 import type { Contract } from "./contracts";
 import type { Employer } from "./employers";
@@ -86,7 +86,7 @@ export async function exportContractPdf(
   // into the crop's space. Both applied here, before anything measures or
   // stamps, so the whole pipeline downstream sees one set of boxes on one page.
   const moved = contract.field_positions ?? {};
-  const mappings = mappingsForForm(rows, formFieldIds(ID407))
+  const mappings = mappingsForFormDef(rows, ID407)
     .map(m => (moved[m.field_id] ? { ...m, ...moved[m.field_id] } : m))
     .map(m => ({ ...m, x: m.x - crop.x, y: m.y - crop.y }));
   if (!mappings.length) {

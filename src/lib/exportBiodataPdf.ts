@@ -17,8 +17,8 @@ import {
   downloadPdf, drawImageField, flowParagraphs, safeFilename, stampFields,
   type FieldValues,
 } from "./pdfDraw";
-import { fetchAllMappings, fetchTemplateImage, mappingsForForm, resetPdfTemplateCache } from "./pdfTemplates";
-import { formFieldIds, getForm, templateImageName } from "./pdfForms";
+import { fetchAllMappings, fetchTemplateImage, resetPdfTemplateCache } from "./pdfTemplates";
+import { getForm, mappingsForFormDef, templateImageName } from "./pdfForms";
 
 // PDF Mapper draws its checkbox markers at these sizes; re-exported so it can
 // keep importing them from here rather than knowing about pdfDraw.
@@ -286,7 +286,7 @@ export async function exportBiodataPdf(applicant: ApplicantForExport): Promise<v
       fetchTemplateImage(templateImageName(BIODATA, i + 1), BIODATA.label)),
   ]);
 
-  const mappings = mappingsForForm(rows, formFieldIds(BIODATA));
+  const mappings = mappingsForFormDef(rows, BIODATA);
   if (!mappings.length) {
     throw new Error("No biodata field mappings found. Set them up in PDF Mapper first.");
   }

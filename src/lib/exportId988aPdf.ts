@@ -24,9 +24,10 @@ import {
   downloadPdf, drawImageField, flowParagraphs, safeFilename, stampFields,
   type FieldValues,
 } from "./pdfDraw";
-import { cropForForm, fetchAllMappings, fetchTemplateImage, mappingsForForm } from "./pdfTemplates";
-import { formFieldIds, getForm, templateImageName } from "./pdfForms";
-import { ID988A_IMAGE_FIELDS, buildId988aValues, type Id988aApplicant } from "./id988a";
+import { cropForForm, fetchAllMappings, fetchTemplateImage } from "./pdfTemplates";
+import { getForm, mappingsForFormDef, templateImageName } from "./pdfForms";
+import { ID988A_COMBS, ID988A_IMAGE_FIELDS, buildId988aValues, type Id988aApplicant } from "./id988a";
+import { spreadCombs } from "./pdfCombs";
 import type { Contract } from "./contracts";
 import type { Employer } from "./employers";
 
@@ -56,7 +57,7 @@ export async function exportId988aPdf(
   const crop = cropForForm(crops, ID988A.id, ID988A.width, ID988A.height);
 
   const moved = contract?.field_positions ?? {};
-  const mappings = mappingsForForm(rows, formFieldIds(ID988A))
+  const mappings = mappingsForFormDef(rows, ID988A)
     .map(m => (moved[m.field_id] ? { ...m, ...moved[m.field_id] } : m))
     .map(m => ({ ...m, x: m.x - crop.x, y: m.y - crop.y }));
   if (!mappings.length) {
@@ -99,6 +100,10 @@ export async function exportId988aPdf(
     for (const id of ids) values[id] = overrides[id] ?? "";
   }
   for (const [id, text] of Object.entries(overrides)) values[id] = text;
+
+  // Last, so a correction typed against "Surname" is spread as a word rather
+  // than being taken for a single letter.
+  spreadCombs(values, mappings, ID988A_COMBS);
 
   // The photograph fills its frame; a signature is scaled to fit, because the
   // pad crops to the ink and the proportions are part of the handwriting.
