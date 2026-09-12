@@ -219,7 +219,15 @@ const TYPE_STYLE: Record<FieldType, { bg: string; border: string; badge: string;
   signature: { bg: "bg-red-400/20",    border: "border-red-500",    badge: "bg-red-100 text-red-700",      dot: "bg-red-500"    },
 };
 
-const ZOOM_LEVELS = [50, 75, 100, 125, 150, 175, 200];
+/* Fine steps up to 200% for framing the page, coarser above it: past 200% the
+   work is nudging one box onto one printed rule, so the jumps can be bigger
+   without losing the place. 500% puts about a fifth of an A4 width on screen —
+   enough to see a comb cell's own borders. */
+const ZOOM_LEVELS = [50, 75, 100, 125, 150, 175, 200, 250, 300, 400, 500];
+/* Above this the scan is magnified past its own resolution. Smoothing turns a
+   printed rule into a grey gradient, which is the one thing you are trying to
+   line a box up against — so show the pixels instead. */
+const ZOOM_PIXELATED = 200;
 const BASE_W = 540; // base PDF panel width in px at 100% zoom
 
 // ── Component ──────────────────────────────────────────────────────────────────
@@ -310,6 +318,14 @@ export default function PdfMapper() {
 
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [saveStatus, setSaveStatus]   = useState<"idle" | "saving" | "saved" | "error">("idle");
+  /* What the server currently holds, as a comparable string per field id.
+     Edits accumulate across every form in one session, so "unsaved" has to be
+     answered for all of them at once — not just the form on screen. Comparing
+     against a snapshot rather than setting a flag at each mutation site means
+     no new edit action can forget to mark itself, and undoing a change by hand
+     correctly clears the warning. State, not a ref: saving replaces it without
+     touching `mappings`, and the badge still has to clear on that render. */
+  const [savedSnap, setSavedSnap] = useState<Record<string, string>>({});
   const [statusMsg, setStatusMsg]     = useState("");
   const [expanded, setExpanded]       = useState<Record<string, boolean>>(
     Object.fromEntries(SECTIONS.map(s => [s.title, true]))
@@ -338,14 +354,51 @@ export default function PdfMapper() {
   const [uploadingStorage, setUploadingStorage] = useState(false);
 
   // ── Zoom ──────────────────────────────────────────────────────────────────────
+  const pdfContRef = useRef<HTMLDivElement>(null);   // the scroll container
   const [zoom, setZoom] = useState(100);
-  const zoomIn  = () => setZoom(z => ZOOM_LEVELS[Math.min(ZOOM_LEVELS.indexOf(z) + 1, ZOOM_LEVELS.length - 1)]);
-  const zoomOut = () => setZoom(z => ZOOM_LEVELS[Math.max(ZOOM_LEVELS.indexOf(z) - 1, 0)]);
+
+  /* Where to scroll once the page has grown or shrunk. At 500% the content is
+     five times the viewport, so leaving scrollLeft/scrollTop where they were
+     would throw whatever you were looking at off-screen — you would zoom in and
+     have to go hunting for the box again.
+
+     The target is worked out from the old scroll position alone, because the
+     content scales linearly: the point under the centre of the viewport stays
+     under the centre. Reading the new scrollWidth instead would mean measuring
+     after layout, and the arithmetic is exact. */
+  const pendingScrollRef = useRef<{ left: number; top: number } | null>(null);
+
+  const zoomTo = useCallback((next: number) => {
+    const el = pdfContRef.current;
+    if (el && next !== zoom) {
+      const k = next / zoom;
+      pendingScrollRef.current = {
+        left: (el.scrollLeft + el.clientWidth  / 2) * k - el.clientWidth  / 2,
+        top:  (el.scrollTop  + el.clientHeight / 2) * k - el.clientHeight / 2,
+      };
+    }
+    setZoom(next);
+  }, [zoom]);
+
+  // Stepping by value, not by index, so a zoom set from anywhere else still
+  // lands on the next rung rather than falling off the ladder at indexOf === -1.
+  const zoomIn  = () => zoomTo(ZOOM_LEVELS.find(z => z > zoom) ?? ZOOM_LEVELS[ZOOM_LEVELS.length - 1]);
+  const zoomOut = () => zoomTo([...ZOOM_LEVELS].reverse().find(z => z < zoom) ?? ZOOM_LEVELS[0]);
+
+  /* The zoom buttons are ordinary clicks, so React flushes this before the
+     browser paints and the jump is not visible. */
+  useEffect(() => {
+    const el = pdfContRef.current;
+    const to = pendingScrollRef.current;
+    if (!el || !to) return;
+    pendingScrollRef.current = null;
+    el.scrollLeft = Math.max(0, to.left);
+    el.scrollTop  = Math.max(0, to.top);
+  }, [zoom]);
 
   // ── Dynamic PDF panel width ────────────────────────────────────────────────
   // Measured from the actual scroll container so the zoom wrapper always fills it
   const [pdfContW, setPdfContW] = useState(BASE_W);
-  const pdfContRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const el = pdfContRef.current;
@@ -401,58 +454,52 @@ export default function PdfMapper() {
     loadFromStorage();
   }, [form, PAGE_NUMBERS]);
 
-  // ── Load field mappings from Supabase ────────────────────────────────────────
+  /* ── Load every form's mappings, once ──────────────────────────────────────
+     One table holds every form, and Save All writes every form, so the editing
+     session has to span them too. Reloading on a form switch would refetch over
+     whatever had been placed and not yet saved — go and check something on the
+     biodata, come back, and an afternoon on ID 988A is gone.
+
+     So this runs once. Retired ids are carried over and measured defaults are
+     seeded for ALL forms here, not just the one on screen, because the save
+     that follows covers all of them. */
   useEffect(() => {
     (async () => {
       const { data, error } = await supabase.from("pdf_field_mappings").select("*");
       if (error) { showMsg("Could not load mappings — check the Supabase table exists."); return; }
-      if (data?.length) {
-        const map: Record<string, Mapping> = {};
-        const loadedCrops: Record<string, Crop> = {};
-        data.forEach((row: Mapping) => {
-          // The settings row carries the global default size, not a field
-          if (row.field_id === SETTINGS_ROW_ID) {
-            if (row.font_size && row.font_size > 0) setDefaultFontSize(row.font_size);
-            return;
-          }
-          // A crop row carries one form's window in the same x/y/w/h columns
-          if (isCropRow(row.field_id)) {
-            const id = row.field_id.slice("__crop_".length, -"__".length);
-            const f  = FORMS.find(x => x.id === id);
-            if (f) loadedCrops[id] = normaliseCrop(row, f.width, f.height);
-            return;
-          }
-          map[row.field_id] = row;
-        });
-        setCrops(loadedCrops);
+      if (!data?.length) return;
 
-        // A form measured off its scan ships approximate positions. Fill only
-        // the gaps, so a box someone has already placed is never moved.
-        FORMS.forEach(f => {
-          if (!f.defaultPositions) return;
-          const dims = (id: string) => getDefaultDims(f, id);
-          const look = fieldLookup(f);
-          Object.entries(f.defaultPositions).forEach(([id, pos]) => {
-            if (map[id]) return;
-            const def = look[id];
-            if (!def) return;
-            const d = dims(id);
-            map[id] = {
-              field_id: id, label: def.label, field_type: def.type,
-              page: pos.page, x: pos.x, y: pos.y, w: d.w, h: d.h, font_size: null,
-            };
-          });
-        });
+      const map: Record<string, Mapping> = {};
+      const loadedCrops: Record<string, Crop> = {};
+      data.forEach((row: Mapping) => {
+        // The settings row carries the global default size, not a field
+        if (row.field_id === SETTINGS_ROW_ID) {
+          if (row.font_size && row.font_size > 0) setDefaultFontSize(row.font_size);
+          return;
+        }
+        // A crop row carries one form's window in the same x/y/w/h columns
+        if (isCropRow(row.field_id)) {
+          const id = row.field_id.slice("__crop_".length, -"__".length);
+          const f  = FORMS.find(x => x.id === id);
+          if (f) loadedCrops[id] = normaliseCrop(row, f.width, f.height);
+          return;
+        }
+        map[row.field_id] = row;
+      });
+      setCrops(loadedCrops);
+
+      let carried = 0;
+      FORMS.forEach(f => {
+        const look = fieldLookup(f);
 
         // Carry retired ids onto their replacement, then drop them from view
-        let carried = 0;
-        Object.entries(form.retired).forEach(([oldId, newId]) => {
+        Object.entries(f.retired).forEach(([oldId, newId]) => {
           const legacy = map[oldId];
           if (!legacy) return;
           delete map[oldId];
-          if (map[newId]) return;            // already placed — keep what is there
-          const def  = FIELD_LOOKUP[newId];
-          const dims = dimsFor(newId);
+          if (map[newId]) return;          // already placed — keep what is there
+          const def  = look[newId];
+          const dims = getDefaultDims(f, newId);
           map[newId] = {
             ...legacy,
             field_id: newId,
@@ -463,13 +510,39 @@ export default function PdfMapper() {
           carried++;
         });
 
-        setMappings(map);
-        showMsg(carried
-          ? `Loaded ${Object.keys(map).length} mappings — Boy/s and Girl/s are now a count box + an Age/s box. Place the 2 new Age/s boxes, then Save All.`
-          : `Loaded ${Object.keys(map).length} saved mappings`);
-      }
+        // A form measured off its scan ships approximate positions. Fill only
+        // the gaps, so a box someone has already placed is never moved.
+        if (!f.defaultPositions) return;
+        Object.entries(f.defaultPositions).forEach(([id, pos]) => {
+          if (map[id]) return;
+          const def = look[id];
+          if (!def) return;
+          const d = getDefaultDims(f, id);
+          map[id] = {
+            field_id: id, label: def.label, field_type: def.type,
+            page: pos.page, x: pos.x, y: pos.y, w: d.w, h: d.h, font_size: null,
+          };
+        });
+      });
+
+      /* Snapshot only what actually came back from the table. The measured
+         defaults seeded above exist nowhere but this browser, so leaving them
+         out is what makes a freshly seeded form show as unsaved — which it is. */
+      const snap: Record<string, string> = {};
+      data.forEach((row: Mapping) => {
+        if (row.field_id === SETTINGS_ROW_ID) return;
+        snap[row.field_id] = isCropRow(row.field_id)
+          ? `${row.x}|${row.y}|${row.w}|${row.h}`
+          : `${row.page}|${row.x}|${row.y}|${row.w}|${row.h}|${row.font_size ?? ""}|${row.align ?? ""}`;
+      });
+      setSavedSnap(snap);
+
+      setMappings(map);
+      showMsg(carried
+        ? `Loaded ${Object.keys(map).length} mappings — Boy/s and Girl/s are now a count box + an Age/s box. Place the 2 new Age/s boxes, then Save All.`
+        : `Loaded ${Object.keys(map).length} saved mappings across ${FORMS.filter(f => !f.generated).length} forms`);
     })();
-  }, [form, FIELD_LOOKUP, dimsFor]);
+  }, []);
 
   // ── Handle PDF / image upload → render → save to Storage ─────────────────────
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -971,6 +1044,38 @@ export default function PdfMapper() {
   }, [combOf, selectedId]);
 
   /* ── Group actions ──────────────────────────────────────────────────────── */
+  /* One row's saveable content. Only the columns Save All writes are included,
+     so the `id` / `updated_at` that come back from select("*") cannot make an
+     untouched row look edited. */
+  const rowKey = (m: Mapping) =>
+    `${m.page}|${m.x}|${m.y}|${m.w}|${m.h}|${m.font_size ?? ""}|${m.align ?? ""}`;
+
+  /** Unsaved edits per form, plus the total — drives the Save All badge. */
+  const unsaved = useMemo(() => {
+    const live: Record<string, string> = {};
+    Object.values(mappings).forEach(m => {
+      if (m.field_id === SETTINGS_ROW_ID || isCropRow(m.field_id)) return;
+      live[m.field_id] = rowKey(m);
+    });
+    Object.entries(crops).forEach(([id, c]) => {
+      const f = FORMS.find(x => x.id === id);
+      if (f && !isFullPage(c, f.width, f.height)) live[cropRowId(id)] = `${c.x}|${c.y}|${c.w}|${c.h}`;
+    });
+
+    const saved = savedSnap;
+    const changed = Array.from(new Set([...Object.keys(live), ...Object.keys(saved)]))
+      .filter(id => live[id] !== saved[id]);
+
+    const byForm: Record<string, number> = {};
+    changed.forEach(id => {
+      const owner = isCropRow(id)
+        ? FORMS.find(f => cropRowId(f.id) === id)
+        : FORMS.find(f => formOwnsField(f, id));
+      if (owner) byForm[owner.id] = (byForm[owner.id] ?? 0) + 1;
+    });
+    return { total: changed.length, byForm };
+  }, [mappings, crops, savedSnap]);
+
   const selectionBoxes = useMemo(
     () => selection.map(id => mappings[id]).filter(Boolean),
     [selection, mappings],
@@ -1022,6 +1127,16 @@ export default function PdfMapper() {
       return n;
     });
   }, [selection]);
+
+  /* A session's work now spans every form and can run long, so a stray reload
+     or a closed tab would take the lot. The browser only honours this if the
+     page has been interacted with, which any mapping edit already is. */
+  useEffect(() => {
+    if (!unsaved.total) return;
+    const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [unsaved.total]);
 
   // ── Save mappings to Supabase ────────────────────────────────────────────────
   const handleSave = async () => {
@@ -1079,7 +1194,19 @@ export default function PdfMapper() {
     } else {
       setSaveStatus("saved");
       resetPdfTemplateCache();  // next biodata export picks up the new sizes/positions
-      showMsg(`✓ Saved ${rows.length} mappings`);
+
+      // The server now holds exactly what was sent, so the payload is the new
+      // snapshot — no refetch, and the unsaved badge clears for every form.
+      const snap: Record<string, string> = {};
+      [...rows.map(toRow), ...cropRows].forEach(r => {
+        snap[r.field_id] = r.field_type === "crop"
+          ? `${r.x}|${r.y}|${r.w}|${r.h}`
+          : `${r.page}|${r.x}|${r.y}|${r.w}|${r.h}|${r.font_size ?? ""}|${(r as { align?: string | null }).align ?? ""}`;
+      });
+      setSavedSnap(snap);
+
+      const forms = FORMS.filter(f => rows.some(m => formOwnsField(f, m.field_id))).length;
+      showMsg(`✓ Saved ${rows.length} mappings across ${forms} form${forms === 1 ? "" : "s"}`);
       setTimeout(() => setSaveStatus("idle"), 3000);
     }
   };
@@ -1240,6 +1367,17 @@ export default function PdfMapper() {
               }`}
             >
               {f.label}
+              {/* Edits survive a form switch now, so a tab has to be able to say
+                  it is carrying some — otherwise leaving ID 988A mapped but
+                  unsaved looks identical to having saved it. */}
+              {unsaved.byForm[f.id] ? (
+                <span
+                  title={`${unsaved.byForm[f.id]} unsaved change${unsaved.byForm[f.id] === 1 ? "" : "s"} — Save All keeps every form at once`}
+                  className={`ml-1.5 inline-block w-1.5 h-1.5 rounded-full align-middle ${
+                    f.id === formId ? "bg-amber-300" : "bg-amber-500"
+                  }`}
+                />
+              ) : null}
             </button>
           ))}
         </div>
@@ -1433,11 +1571,21 @@ export default function PdfMapper() {
         {/* Save All */}
         <button
           onClick={handleSave} disabled={saveStatus === "saving"}
+          title={unsaved.total
+            ? `${unsaved.total} unsaved change${unsaved.total === 1 ? "" : "s"} across ${Object.keys(unsaved.byForm).length} form${Object.keys(unsaved.byForm).length === 1 ? "" : "s"} — all saved together`
+            : "Saves every form's mappings, not just the one on screen"}
           className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-white rounded-lg transition-colors ${
-            saveStatus === "saved" ? "bg-green-600" : saveStatus === "error" ? "bg-red-600" : saveStatus === "saving" ? "bg-gray-400" : "bg-slate-800 hover:bg-slate-700"
+            saveStatus === "saved" ? "bg-green-600"
+              : saveStatus === "error" ? "bg-red-600"
+              : saveStatus === "saving" ? "bg-gray-400"
+              : unsaved.total ? "bg-amber-600 hover:bg-amber-500"
+              : "bg-slate-800 hover:bg-slate-700"
           }`}
         >
-          {saveStatus === "saving" ? "Saving…" : saveStatus === "saved" ? "✓ Saved" : "💾 Save All"}
+          {saveStatus === "saving" ? "Saving…"
+            : saveStatus === "saved" ? "✓ Saved"
+            : unsaved.total ? `💾 Save All (${unsaved.total})`
+            : "💾 Save All"}
         </button>
 
         {statusMsg && <span className="text-xs text-slate-500 italic max-w-xs truncate">{statusMsg}</span>}
@@ -1599,9 +1747,11 @@ export default function PdfMapper() {
                 className="w-7 h-7 flex items-center justify-center rounded text-slate-600 hover:bg-white hover:shadow-sm disabled:opacity-30 disabled:cursor-not-allowed font-bold text-base transition-all"
               >−</button>
               <button
-                onClick={() => setZoom(100)}
-                title="Reset to 100%"
-                className="w-12 h-7 flex items-center justify-center rounded text-xs font-medium text-slate-600 hover:bg-white hover:shadow-sm transition-all tabular-nums"
+                onClick={() => zoomTo(100)}
+                title={zoom === 100 ? "Zoom — 50% to 500%" : "Back to 100%"}
+                className={`w-14 h-7 flex items-center justify-center rounded text-xs font-medium hover:bg-white hover:shadow-sm transition-all tabular-nums ${
+                  zoom === 100 ? "text-slate-600" : "text-slate-900 font-semibold"
+                }`}
               >{zoom}%</button>
               <button
                 onClick={zoomIn}
@@ -1674,6 +1824,7 @@ export default function PdfMapper() {
                   src={pageImages[currentPage]}
                   alt={`PDF page ${currentPage}`}
                   className="w-full block select-none"
+                  style={zoom > ZOOM_PIXELATED ? { imageRendering: "pixelated" } : undefined}
                   draggable={false}
                   onError={() => setImgFailed(p => ({ ...p, [currentPage]: true }))}
                   onLoad={()  => setImgFailed(p => { const n = { ...p }; delete n[currentPage]; return n; })}
