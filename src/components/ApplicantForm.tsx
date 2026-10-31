@@ -510,7 +510,8 @@ export default function ApplicantForm() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="md:col-span-2">
               <label className={lbl}>Full Name *</label>
-              <input value={data.fullName} onChange={e => set("fullName", e.target.value)} type="text" required placeholder="Please enter..." className={inp} />
+              {/* Names are kept in capitals everywhere — the database enforces it too */}
+              <input value={data.fullName} onChange={e => set("fullName", e.target.value.toUpperCase())} type="text" required placeholder="Please enter..." className={inp} />
             </div>
             <div>
               <label className={lbl}>Date of Birth *</label>

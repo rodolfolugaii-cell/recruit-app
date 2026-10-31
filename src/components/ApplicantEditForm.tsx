@@ -235,7 +235,7 @@ export default function ApplicantEditForm({
         <Section title="Personal Details" />
         <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
           <Field label="Full Name *">
-            <input value={draft.full_name ?? ""} onChange={e => setTop("full_name", e.target.value)} className={inp} />
+            <input value={draft.full_name ?? ""} onChange={e => setTop("full_name", e.target.value.toUpperCase())} className={inp} />
           </Field>
           <Field label="Date of Birth">
             <input type="date" value={draft.date_of_birth ?? ""} onChange={e => setTop("date_of_birth", e.target.value)} className={inp} />

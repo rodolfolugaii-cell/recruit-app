@@ -415,7 +415,7 @@ export async function buildGenericBiodataPdf(ap: ApplicantForExport): Promise<Ui
 
   /* ── Personal data ── */
   bar(s, "Personal Data:");
-  row(s, [["Name", ap.full_name]]);
+  row(s, [["Name", (ap.full_name ?? "").toUpperCase()]]);
   row(s, [["Date of Birth", formDate(ap.date_of_birth)], ["Age", ageFrom(ap.date_of_birth)]]);
   row(s, [["Place of Birth", fd.placeOfBirth], ["Sex", ap.gender]]);
   row(s, [["Citizenship", ap.nationality], ["Civil Status", fd.maritalStatus]]);

@@ -20,6 +20,7 @@ order**. Later files reference tables from earlier ones, so the order matters.
 | `20260908000100_applicant_documents.sql` | `applicants.documents` — the six required copies, ticked off per helper |
 | `20260912000100_field_alignment.sql` | `pdf_field_mappings.align` — left or centred text, per mapped box |
 | `20261031000100_applicant_duplicates.sql` | auto-trash of repeat applications (same name + mobile), the two `/apply` functions for editing an earlier application, and a one-time cleanup of existing duplicates |
+| `20261031000200_uppercase_names.sql` | applicant names kept in CAPITALS by a trigger, and existing names converted |
 
 **They are safe to re-run and safe on the live database.** Every table is
 `CREATE TABLE IF NOT EXISTS`, every later column is a separate
