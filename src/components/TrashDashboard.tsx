@@ -31,6 +31,8 @@ interface TrashedApplicant {
   photo_url: string | null;
   deleted_at: string | null;
   deleted_from: string | null;
+  /** Set when /apply trashed a repeat submission — the id of the application kept */
+  duplicate_of: string | null;
 }
 
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -91,13 +93,13 @@ export default function TrashDashboard() {
     (async () => {
       const { data, error } = await supabase
         .from("applicants")
-        .select("id, created_at, full_name, nationality, gender, mobile, photo_url, deleted_at, deleted_from")
+        .select("id, created_at, full_name, nationality, gender, mobile, photo_url, deleted_at, deleted_from, duplicate_of")
         .eq("status", DELETED_STATUS)
         .order("deleted_at", { ascending: false, nullsFirst: false });
 
       if (!alive) return;
       if (error) {
-        // Most likely cause: the deleted_at / deleted_from migration hasn't been run
+        // Most likely cause: a migration hasn't been run (deleted_at / deleted_from, or duplicate_of)
         setLoadErr(error.message);
         setItems([]);
       } else {
@@ -195,6 +197,10 @@ export default function TrashDashboard() {
   ADD COLUMN IF NOT EXISTS deleted_at   TIMESTAMPTZ,
   ADD COLUMN IF NOT EXISTS deleted_from TEXT;`}
         </pre>
+        <p className="text-sm text-gray-500 mt-4">
+          If it mentions <code className="bg-gray-100 px-1 rounded">duplicate_of</code>, run{" "}
+          <code className="bg-gray-100 px-1 rounded">supabase/migrations/20261031000100_applicant_duplicates.sql</code>.
+        </p>
         <button onClick={retry} className="mt-4 px-4 py-2 rounded-lg text-sm font-medium bg-slate-800 text-white hover:bg-slate-700 transition-colors">
           Retry
         </button>
@@ -249,7 +255,15 @@ export default function TrashDashboard() {
               </div>
 
               <div className="min-w-0 flex-1">
-                <p className="font-semibold text-gray-800 truncate">{item.full_name}</p>
+                <p className="font-semibold text-gray-800 truncate">
+                  {item.full_name}
+                  {item.duplicate_of && (
+                    <span title="Same name and mobile as an earlier application — sent here automatically"
+                      className="ml-2 align-middle text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 font-medium">
+                      Duplicate
+                    </span>
+                  )}
+                </p>
                 <p className="text-xs text-gray-400 truncate">
                   {[item.nationality, item.gender, item.mobile].filter(Boolean).join(" · ") || "—"}
                 </p>

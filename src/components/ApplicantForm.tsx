@@ -46,6 +46,28 @@ interface FormState {
   workExperience: WorkExperienceEntry[];
 }
 
+/**
+ * The earlier application for the same name + mobile, as find_my_application
+ * returns it. See supabase/migrations/20261031000100_applicant_duplicates.sql.
+ */
+interface PreviousApplication {
+  id: string;
+  full_name: string;
+  date_of_birth: string | null;
+  nationality: string | null;
+  gender: string | null;
+  mobile: string | null;
+  photo_url: string | null;
+  form_data: Record<string, unknown> | null;
+}
+
+/**
+ * The original being edited. update_my_application re-checks the name + mobile
+ * it was found by, so those are kept exactly as they were at lookup even if the
+ * applicant then corrects them in the form.
+ */
+interface Editing { id: string; lookupName: string; lookupMobile: string; photoUrl: string | null; }
+
 /* ── Constants ──────────────────────────────────────────────────────────── */
 const STEPS = [
   "Personal Details",
@@ -80,6 +102,85 @@ const INITIAL: FormState = {
   ],
   workExperience: [],
 };
+
+/* ── form_data in both directions ───────────────────────────────────────── */
+/** What gets saved — shared by a fresh submission and an edit of an earlier one */
+function toFormData(data: FormState) {
+  const kids = kidsOf(data);
+  return {
+    placeOfBirth: data.placeOfBirth, currentLocation: data.currentLocation,
+    height: data.height, weight: data.weight, maritalStatus: data.maritalStatus,
+    education: data.education, religion: data.religion,
+    contractStatus: data.contractStatus, lastWorkingDay: data.lastWorkingDay,
+    boysCount: kids.boys,   boysAges: kids.boysAges,
+    girlsCount: kids.girls, girlsAges: kids.girlsAges,
+    numberOfKids: kids.total,   // kept so older readers still find a total
+    familyMembersCount: data.familyMembersCount,
+    educationCourse: data.educationCourse, totalYearsHK: data.totalYearsHK,
+    numberOfEmployers: data.numberOfEmployers,
+    languages: { english: data.langEnglish, cantonese: data.langCantonese, mandarin: data.langMandarin },
+    specialSkills: data.specialSkills,
+    skills: data.skills, cookingAbilities: data.cookingAbilities,
+    preferences: data.preferences,
+    otherExperience: data.otherExperience.filter(e => e.country),
+    workExperience: data.workExperience,
+  };
+}
+
+const str  = (v: unknown) => (v === null || v === undefined ? "" : String(v));
+const strs = (v: unknown) => (Array.isArray(v) ? v.map(String) : []);
+const obj  = (v: unknown) => (v && typeof v === "object" ? (v as Record<string, unknown>) : {});
+
+/** The reverse of toFormData — pre-fills the form from an earlier application */
+function fromPrevious(p: PreviousApplication): FormState {
+  const fd    = obj(p.form_data);
+  const langs = obj(fd.languages);
+  const prefs = obj(fd.preferences);
+  const kids  = kidsOf({
+    numberOfKids: str(fd.numberOfKids),
+    boysCount: str(fd.boysCount),   boysAges: str(fd.boysAges),
+    girlsCount: str(fd.girlsCount), girlsAges: str(fd.girlsAges),
+  });
+  const other = (Array.isArray(fd.otherExperience) ? fd.otherExperience : []).map(e => {
+    const o = obj(e);
+    return { country: str(o.country), yearsOfEmployment: str(o.yearsOfEmployment), jobDuties: str(o.jobDuties) };
+  });
+  while (other.length < 2) other.push({ country: "", yearsOfEmployment: "", jobDuties: "" });
+
+  return {
+    ...INITIAL,
+    fullName: p.full_name ?? "", dob: p.date_of_birth ?? "",
+    nationality: p.nationality ?? "", gender: p.gender ?? "", mobile: p.mobile ?? "",
+    placeOfBirth: str(fd.placeOfBirth), currentLocation: str(fd.currentLocation),
+    height: str(fd.height), weight: str(fd.weight),
+    maritalStatus: str(fd.maritalStatus), religion: str(fd.religion),
+    contractStatus: str(fd.contractStatus), lastWorkingDay: str(fd.lastWorkingDay),
+    boysCount: kids.boys,   boysAges: kids.boysAges,
+    girlsCount: kids.girls, girlsAges: kids.girlsAges,
+    familyMembersCount: str(fd.familyMembersCount),
+    education: str(fd.education), educationCourse: str(fd.educationCourse),
+    totalYearsHK: str(fd.totalYearsHK), numberOfEmployers: str(fd.numberOfEmployers),
+    langEnglish: str(langs.english), langCantonese: str(langs.cantonese), langMandarin: str(langs.mandarin),
+    specialSkills: str(fd.specialSkills),
+    skills: strs(fd.skills), cookingAbilities: strs(fd.cookingAbilities),
+    preferences: {
+      sundayOff:              !!prefs.sundayOff,
+      flexibleDayOff:         !!prefs.flexibleDayOff,
+      willingWithOtherHelper: !!prefs.willingWithOtherHelper,
+      willingStayIn:          !!prefs.willingStayIn,
+    },
+    otherExperience: other.slice(0, 2),
+    workExperience: (Array.isArray(fd.workExperience) ? fd.workExperience : []).slice(0, 4).map(w => {
+      const o = obj(w);
+      const we = emptyWE();
+      for (const k of Object.keys(we) as (keyof WorkExperienceEntry)[]) {
+        if (k !== "householdChores") we[k] = str(o[k]);
+      }
+      we.householdChores = strs(o.householdChores);
+      return we;
+    }),
+  };
+}
 
 /* ── Shared style tokens ────────────────────────────────────────────────── */
 const inp = "mt-1 block w-full rounded-md border border-gray-300 p-2 text-sm focus:border-blue-500 focus:outline-none text-gray-900 bg-white";
@@ -171,6 +272,41 @@ function LangRow({ name, label, value, onChange }: { name: string; label: string
   );
 }
 
+/** Shown when the name + mobile on step 1 already has an application on file */
+function DuplicateDialog({ name, onEdit, onKeep }: { name: string; onEdit: () => void; onKeep: () => void }) {
+  return (
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+      <div role="dialog" aria-modal="true" className="bg-white rounded-xl shadow-2xl border border-gray-200 max-w-sm w-full">
+        <div className="p-6">
+          <div className="w-12 h-12 bg-amber-100 rounded-full flex items-center justify-center mb-4">
+            <svg className="w-6 h-6 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+            </svg>
+          </div>
+          <h3 className="font-bold text-gray-900">You have already applied</h3>
+          <p className="text-sm text-gray-500 mt-2 leading-relaxed">
+            We already have an application for <span className="font-semibold text-gray-700">{name}</span> with
+            this mobile number. Only your first application is kept, so a new one would not be used.
+          </p>
+          <p className="text-sm text-gray-500 mt-2 leading-relaxed">
+            Would you like to edit your submission instead? We&apos;ll fill in the form with what you sent before.
+          </p>
+        </div>
+        <div className="px-6 py-4 bg-gray-50 border-t border-gray-100 flex flex-col-reverse sm:flex-row sm:justify-end gap-2 sm:gap-3">
+          <button onClick={onKeep}
+            className="px-4 py-2 rounded-lg text-sm font-medium text-gray-700 bg-white border border-gray-300 hover:bg-gray-100 transition-colors">
+            No, keep it as is
+          </button>
+          <button onClick={onEdit}
+            className="px-4 py-2 rounded-lg text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 transition-colors">
+            Yes, edit my submission
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ── Main Component ─────────────────────────────────────────────────────── */
 export default function ApplicantForm() {
   const [step, setStep]       = useState(0);
@@ -181,6 +317,12 @@ export default function ApplicantForm() {
   const [submitted, setSubmitted] = useState(false);
   // Trimmed PNG data URL from the signature pad on the final step
   const [signature, setSignature] = useState<string | null>(null);
+  // Duplicate check on leaving step 1: the match awaiting a yes/no, the
+  // original being edited after a yes, and the "already on file" end after a no
+  const [checking, setChecking]   = useState(false);
+  const [found, setFound]         = useState<PreviousApplication | null>(null);
+  const [editing, setEditing]     = useState<Editing | null>(null);
+  const [keptOriginal, setKeptOriginal] = useState(false);
 
   /* ── Updaters ── */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -204,15 +346,41 @@ export default function ApplicantForm() {
 
   /* ── Validation ── */
   const canNext = () => {
-    if (step === 0) return !!(photo && data.fullName && data.dob && data.nationality && data.gender && data.mobile && data.currentLocation);
+    if (step === 0) return !!((photo || editing?.photoUrl) && data.fullName && data.dob && data.nationality && data.gender && data.mobile && data.currentLocation);
     return true;
+  };
+
+  /* ── Next — leaving step 1 checks for an earlier application ──────────────
+     A failed lookup (say, the migration not run yet) never blocks a new
+     applicant: the insert trigger still trashes a repeat on the way in. ── */
+  const handleNext = async () => {
+    if (step === 0 && !editing) {
+      setChecking(true);
+      const { data: prev, error } = await supabase.rpc("find_my_application", {
+        p_name: data.fullName, p_mobile: data.mobile,
+      });
+      setChecking(false);
+      if (error) console.warn("Duplicate check failed:", error.message);
+      else if (prev) { setFound(prev as PreviousApplication); return; }
+    }
+    setStep(s => s + 1);
+  };
+
+  const editPrevious = () => {
+    if (!found) return;
+    setData(fromPrevious(found));
+    setPhoto(null);
+    setPreview(found.photo_url);
+    setEditing({ id: found.id, lookupName: data.fullName, lookupMobile: data.mobile, photoUrl: found.photo_url });
+    setFound(null);
+    setStep(0);   // stay on step 1 so they see their details come back
   };
 
   /* ── Submit ── */
   const handleSubmit = async () => {
     if (!signature) { alert("Please sign in the box before submitting."); return; }
     setLoading(true);
-    let photoUrl = "";
+    let photoUrl = editing?.photoUrl ?? "";
     let signatureUrl = "";
     try {
       if (photo) {
@@ -232,7 +400,7 @@ export default function ApplicantForm() {
       if (sigErr) throw sigErr;
       signatureUrl = supabase.storage.from("applicant-photos").getPublicUrl(sigPath).data.publicUrl;
 
-      const { error } = await supabase.from("applicants").insert([{
+      const row = {
         full_name:     data.fullName,
         date_of_birth: data.dob        || null,
         nationality:   data.nationality || null,
@@ -240,26 +408,20 @@ export default function ApplicantForm() {
         mobile:        data.mobile      || null,
         photo_url:     photoUrl         || null,
         signature_url: signatureUrl     || null,
-        signed_at:     new Date().toISOString(),   // when they certified the details
-        form_data: {
-          placeOfBirth: data.placeOfBirth, currentLocation: data.currentLocation,
-          height: data.height, weight: data.weight, maritalStatus: data.maritalStatus,
-          education: data.education, religion: data.religion,
-          contractStatus: data.contractStatus, lastWorkingDay: data.lastWorkingDay,
-          boysCount: kids.boys,   boysAges: kids.boysAges,
-          girlsCount: kids.girls, girlsAges: kids.girlsAges,
-          numberOfKids: kids.total,   // kept so older readers still find a total
-          familyMembersCount: data.familyMembersCount,
-          educationCourse: data.educationCourse, totalYearsHK: data.totalYearsHK,
-          numberOfEmployers: data.numberOfEmployers,
-          languages: { english: data.langEnglish, cantonese: data.langCantonese, mandarin: data.langMandarin },
-          specialSkills: data.specialSkills,
-          skills: data.skills, cookingAbilities: data.cookingAbilities,
-          preferences: data.preferences,
-          otherExperience: data.otherExperience.filter(e => e.country),
-          workExperience: data.workExperience,
-        },
-      }]);
+        form_data:     toFormData(data),
+      };
+
+      // An edit overwrites the original in place, so the first application
+      // keeps its place on the board; anything else is a fresh insert.
+      const { error } = editing
+        ? await supabase.rpc("update_my_application", {
+            p_id: editing.id, p_lookup_name: editing.lookupName, p_lookup_mobile: editing.lookupMobile,
+            p_row: row,
+          })
+        : await supabase.from("applicants").insert([{
+            ...row,
+            signed_at: new Date().toISOString(),   // when they certified the details
+          }]);
       if (error) throw error;
       setSubmitted(true);
     } catch (err: unknown) {
@@ -283,11 +445,37 @@ export default function ApplicantForm() {
               <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
             </svg>
           </div>
-          <h2 className="text-xl font-bold text-gray-800 mb-2">Application Submitted!</h2>
+          <h2 className="text-xl font-bold text-gray-800 mb-2">{editing ? "Application Updated!" : "Application Submitted!"}</h2>
+          <p className="text-sm text-gray-500 leading-relaxed">
+            Thank you, <span className="font-semibold text-gray-700">{data.fullName}</span>.{" "}
+            {editing
+              ? "Your changes have been saved to your application and will be reviewed by our team shortly."
+              : "Your profile has been received and will be reviewed by our team shortly."}
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  /* ── Declined to edit — the first application stands ── */
+  if (keptOriginal) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6 text-gray-900">
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-10 max-w-sm w-full text-center">
+          <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-5">
+            <svg className="w-8 h-8 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+          </div>
+          <h2 className="text-xl font-bold text-gray-800 mb-2">Your Application Is on File</h2>
           <p className="text-sm text-gray-500 leading-relaxed">
             Thank you, <span className="font-semibold text-gray-700">{data.fullName}</span>.
-            Your profile has been received and will be reviewed by our team shortly.
+            Your first application is already with our team, so there is no need to apply again.
           </p>
+          <button onClick={() => { setKeptOriginal(false); setStep(0); }}
+            className="mt-6 text-sm font-medium text-blue-600 hover:text-blue-700">
+            ← Back to the form
+          </button>
         </div>
       </div>
     );
@@ -311,7 +499,10 @@ export default function ApplicantForm() {
               <input type="file" accept="image/*" onChange={handlePhoto}
                 className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
             </div>
-            <p className="text-xs text-gray-500 leading-relaxed">Upload a professional headshot.<br />JPEG or PNG accepted.</p>
+            <p className="text-xs text-gray-500 leading-relaxed">
+              Upload a professional headshot.<br />JPEG or PNG accepted.
+              {editing?.photoUrl && !photo && <><br /><span className="text-gray-400">Your previous photo is kept unless you choose a new one.</span></>}
+            </p>
           </div>
 
           {/* Identity */}
@@ -742,6 +933,12 @@ export default function ApplicantForm() {
           </div>
         </div>
 
+        {editing && (
+          <div className="mx-6 mt-5 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-sm text-amber-800">
+            You are editing your earlier application. Submitting will save your changes over it.
+          </div>
+        )}
+
         {/* Step content */}
         <div className="p-6">{renderStep()}</div>
 
@@ -754,20 +951,28 @@ export default function ApplicantForm() {
             </button>
           )}
           {step < STEPS.length - 1 ? (
-            <button type="button" onClick={() => setStep(s => s + 1)} disabled={!canNext()}
+            <button type="button" onClick={handleNext} disabled={!canNext() || checking}
               className="flex-1 bg-blue-600 text-white py-3 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed">
-              Next →
+              {checking ? "Checking…" : "Next →"}
             </button>
           ) : (
             <button type="button" onClick={handleSubmit} disabled={loading || !signature}
               title={!signature ? "Please sign before submitting" : undefined}
               className="flex-1 bg-blue-600 text-white py-3 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed">
-              {loading ? "Submitting…" : !signature ? "Sign to Submit" : "Submit Application"}
+              {loading ? "Submitting…" : !signature ? "Sign to Submit" : editing ? "Save Changes" : "Submit Application"}
             </button>
           )}
         </div>
 
       </div>
+
+      {found && (
+        <DuplicateDialog
+          name={found.full_name}
+          onEdit={editPrevious}
+          onKeep={() => { setFound(null); setKeptOriginal(true); }}
+        />
+      )}
     </div>
   );
 }
