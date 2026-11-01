@@ -16,6 +16,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import EmployerForm from "@/components/EmployerForm";
+import ApplicantProfileModal, { type ProfileApplicant } from "@/components/ApplicantProfileModal";
 import { supabase } from "@/lib/supabase";
 import { ageFrom } from "@/lib/formDates";
 import {
@@ -208,14 +209,21 @@ function HelperPhoto({ h, size }: { h: Helper; size: string }) {
   );
 }
 
-function HelperCard({ h, busy, onRemove }: { h: Helper; busy: boolean; onRemove: () => void }) {
+function HelperCard({
+  h, busy, opening, onOpen, onRemove,
+}: { h: Helper; busy: boolean; opening: boolean; onOpen: () => void; onRemove: () => void }) {
   const age  = ageFrom(h.date_of_birth);
   const meta = [h.nationality, age && `${age} yrs`].filter(Boolean).join(" · ");
   return (
     // Left edge matches the board pill: amber for For Review, green for Candidates
-    <div className={`relative h-[88px] bg-white rounded-xl border border-slate-300 border-l-4 shadow-md pl-3 pr-8 flex items-center gap-3 hover:shadow-lg transition-shadow ${
-      boardOf(h) === "For Review" ? "border-l-amber-400" : "border-l-emerald-400"
-    }`}>
+    <div
+      role="button" tabIndex={0} title="View full profile"
+      onClick={onOpen}
+      onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(); } }}
+      className={`relative h-[88px] bg-white rounded-xl border border-slate-300 border-l-4 shadow-md pl-3 pr-8 flex items-center gap-3 cursor-pointer hover:shadow-lg hover:border-slate-400 transition-shadow focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 ${
+        boardOf(h) === "For Review" ? "border-l-amber-400" : "border-l-emerald-400"
+      } ${opening ? "opacity-60" : ""}`}
+    >
       <HelperPhoto h={h} size="w-14 h-14" />
       <div className="min-w-0 flex-1">
         <p className="font-semibold text-sm text-gray-900 truncate" title={h.full_name}>{h.full_name}</p>
@@ -234,7 +242,8 @@ function HelperCard({ h, busy, onRemove }: { h: Helper; busy: boolean; onRemove:
           )}
         </div>
       </div>
-      <button onClick={onRemove} disabled={busy} title="Remove from this employer" aria-label="Remove from this employer"
+      <button onClick={e => { e.stopPropagation(); onRemove(); }} onKeyDown={e => e.stopPropagation()}
+        disabled={busy} title="Remove from this employer" aria-label="Remove from this employer"
         className="absolute top-2 right-2 w-5 h-5 rounded-md bg-red-500 text-white flex items-center justify-center shadow-sm hover:bg-red-600 transition-colors disabled:opacity-40">
         <svg className="w-3 h-3" fill="none" viewBox="0 0 12 12">
           <path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
@@ -330,6 +339,9 @@ export default function EmployersDashboard() {
   const [editing, setEditing]     = useState<Employer | "new" | null>(null);
   // The employer whose "+" box was clicked
   const [addingTo, setAddingTo]   = useState<Employer | null>(null);
+  // The helper whose profile is open — the full row, fetched on click
+  const [profile, setProfile]     = useState<ProfileApplicant | null>(null);
+  const [openingId, setOpeningId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setError(null);
@@ -382,6 +394,44 @@ export default function EmployersDashboard() {
       alert("Could not add helper: " + (e instanceof Error ? e.message : String(e)));
     }
   }, [addingTo, setEmployerOf]);
+
+  /* ── Profile modal ─────────────────────────────────────────────────────────
+     The branch only holds a slice of each helper, so the full row is fetched
+     when a card is clicked — the same record For Review opens. ── */
+  const openHelper = async (h: Helper) => {
+    if (openingId) return;
+    setOpeningId(h.id);
+    try {
+      const { data, error: pErr } = await supabase.from("applicants").select("*").eq("id", h.id).single();
+      if (pErr) throw pErr;
+      setProfile(data as ProfileApplicant);
+    } catch (e) {
+      alert("Could not open the profile: " + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setOpeningId(null);
+    }
+  };
+
+  // The modal has already written the change; mirror it into the branch, so
+  // an edited name or a new employer moves the card without a reload
+  const handleProfileChange = useCallback((u: ProfileApplicant) => {
+    setProfile(u);
+    setHelpers(list => list.map(h => (h.id !== u.id ? h : {
+      ...h,
+      full_name:       u.full_name,
+      nationality:     u.nationality ?? null,
+      gender:          u.gender ?? null,
+      mobile:          u.mobile ?? null,
+      photo_url:       u.photo_url ?? null,
+      date_of_birth:   u.date_of_birth ?? null,
+      employer_id:     u.employer_id ?? null,
+      contract_status: u.form_data?.contractStatus || null,
+    })));
+  }, []);
+
+  const handleEmployerCreated = useCallback((e: Employer) => {
+    setEmployers(prev => (prev.some(x => x.id === e.id) ? prev : [e, ...prev]));
+  }, []);
 
   const handleRemove = async (h: Helper, emp: Employer) => {
     if (!confirm(`Remove ${h.full_name} from ${emp.name}?\n\nThe helper stays on their board, just unassigned.`)) return;
@@ -524,7 +574,13 @@ export default function EmployersDashboard() {
                             <Branch key={h?.id ?? "add"} first={i === 0} last={i === col.length - 1}
                               noBusOnWide={columns.length === 1 && i === 0}>
                               {h ? (
-                                <HelperCard h={h} busy={busyHelper === h.id} onRemove={() => handleRemove(h, emp)} />
+                                <HelperCard
+                                  h={h}
+                                  busy={busyHelper === h.id}
+                                  opening={openingId === h.id}
+                                  onOpen={() => openHelper(h)}
+                                  onRemove={() => handleRemove(h, emp)}
+                                />
                               ) : (
                                 <button
                                   onClick={() => setAddingTo(emp)}
@@ -554,6 +610,19 @@ export default function EmployersDashboard() {
           employersById={employersById}
           onPick={handleAssign}
           onClose={() => setAddingTo(null)}
+        />
+      )}
+
+      {/* ── Helper profile — the same modal as For Review ── */}
+      {profile && (
+        <ApplicantProfileModal
+          key={profile.id}
+          applicant={profile}
+          employers={employers}
+          employersById={employersById}
+          onEmployerCreated={handleEmployerCreated}
+          onApplicantChange={handleProfileChange}
+          onClose={() => setProfile(null)}
         />
       )}
 
