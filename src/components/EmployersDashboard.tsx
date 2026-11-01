@@ -57,7 +57,7 @@ const boardOf = (h: Helper) => (h.status === "For Review" ? "For Review" : "Cand
    first box. Keep these in step with the h-[88px] / gap-3 classes below. ── */
 const BOX_H = 88;
 const GAP   = 12;
-const LINE  = "bg-slate-300";
+const LINE  = "bg-slate-400";
 
 /** One leaf on the branch: a tick into the box, and the trunk above and below it. */
 function Branch({ first, last, children }: { first: boolean; last: boolean; children: React.ReactNode }) {
@@ -102,7 +102,9 @@ function EmployerCard({
   ].filter(Boolean).join(" · ");
 
   return (
-    <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden flex flex-col hover:shadow-md transition-shadow">
+    // Darker outline, real shadow and a blue left edge — white on the page's
+    // gray-50 alone all but disappears
+    <div className="bg-white rounded-xl border border-slate-300 border-l-4 border-l-blue-500 shadow-md overflow-hidden flex flex-col hover:shadow-lg transition-shadow">
       {/* Banner */}
       <div className="h-16 bg-gradient-to-br from-slate-700 to-slate-900 relative">
         {emp.banner_url && (
@@ -117,7 +119,8 @@ function EmployerCard({
       </div>
 
       {/* Identity */}
-      <div className="px-5 pb-3 -mt-6">
+      {/* relative: without it the positioned banner paints over the logo's top half */}
+      <div className="relative px-5 pb-3 -mt-6">
         <div className={`w-12 h-12 rounded-xl border-4 border-white shadow-sm overflow-hidden flex items-center justify-center ${tint.bg}`}>
           {emp.logo_url ? (
             // eslint-disable-next-line @next/next/no-img-element
@@ -179,7 +182,10 @@ function HelperCard({ h, busy, onRemove }: { h: Helper; busy: boolean; onRemove:
   const age  = ageFrom(h.date_of_birth);
   const meta = [h.nationality, age && `${age} yrs`].filter(Boolean).join(" · ");
   return (
-    <div className="h-[88px] bg-white rounded-xl border border-gray-200 shadow-sm px-3 flex items-center gap-3 hover:shadow-md transition-shadow">
+    // Left edge matches the board pill: amber for For Review, green for Candidates
+    <div className={`h-[88px] bg-white rounded-xl border border-slate-300 border-l-4 shadow-md px-3 flex items-center gap-3 hover:shadow-lg transition-shadow ${
+      boardOf(h) === "For Review" ? "border-l-amber-400" : "border-l-emerald-400"
+    }`}>
       <HelperPhoto h={h} size="w-14 h-14" />
       <div className="min-w-0 flex-1">
         <p className="font-semibold text-sm text-gray-900 truncate" title={h.full_name}>{h.full_name}</p>
@@ -471,7 +477,7 @@ export default function EmployersDashboard() {
                   <Branch first={!placed.length} last>
                     <button
                       onClick={() => setAddingTo(emp)}
-                      className="w-full h-[88px] rounded-xl border-2 border-dashed border-gray-300 text-gray-400 hover:border-blue-400 hover:text-blue-600 hover:bg-blue-50/40 transition-colors flex items-center justify-center gap-2 text-sm font-medium"
+                      className="w-full h-[88px] rounded-xl border-2 border-dashed border-slate-400 bg-white/60 text-slate-500 hover:border-blue-400 hover:text-blue-600 hover:bg-blue-50/40 transition-colors flex items-center justify-center gap-2 text-sm font-medium"
                     >
                       <span className="text-xl leading-none">＋</span> Add helper
                     </button>
