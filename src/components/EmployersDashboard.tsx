@@ -51,23 +51,46 @@ const HELPER_COLUMNS =
 const boardOf = (h: Helper) => (h.status === "For Review" ? "For Review" : "Candidates");
 
 /* ── Branch geometry ─────────────────────────────────────────────────────────
-   Every box on a branch is BOX_H tall with GAP between them, so the trunk and
-   the ticks can be placed with fixed offsets instead of measuring the DOM.
-   The stub from the employer card meets the trunk level with the middle of the
-   first box. Keep these in step with the h-[88px] / gap-3 classes below. ── */
-const BOX_H = 88;
-const GAP   = 12;
-const LINE  = "bg-slate-400";
+   Boxes stack PER_COLUMN deep, then a new column starts to the right. A bus
+   line runs along the top of the columns, and each column's trunk drops from
+   it with a tick into every box.
 
-/** One leaf on the branch: a tick into the box, and the trunk above and below it. */
-function Branch({ first, last, children }: { first: boolean; last: boolean; children: React.ReactNode }) {
+   Every box is BOX_H tall with GAP between them, and every column is the same
+   width, so all the lines are placed with fixed offsets instead of measuring
+   the DOM. Keep these in step with the h-[88px] / gap-3 / w-72 / pl-10 / pt-5
+   classes below.
+
+        stub ─┬──────────────── bus ─────────┬──
+              ├─ box                          ├─ box
+              ├─ box          …               └─ ＋
+              └─ box (5th)                                                   */
+const PER_COLUMN = 5;
+const BOX_H      = 88;
+const GAP        = 12;
+const COL_GAP    = 40;   // between columns
+const BUS_SPACE  = 20;   // pt-5 — room above the boxes for the bus
+const BUS_Y      = BUS_SPACE / 2;
+const TRUNK_X    = 20;   // -left-5 inside a pl-10 column
+const LINE       = "bg-slate-400";
+
+/**
+ * One leaf on the branch: a tick into the box, and the trunk above and below
+ * it. The first box in a column reaches up to the bus rather than to a box.
+ */
+function Branch({
+  first, last, noBusOnWide = false, children,
+}: {
+  first: boolean; last: boolean;
+  /** A lone column on a wide screen has no bus — the stub meets the tick, so nothing should rise above it. */
+  noBusOnWide?: boolean;
+  children: React.ReactNode;
+}) {
+  const reach = first ? BUS_SPACE - BUS_Y : GAP / 2;
   return (
     <div className="relative">
-      {/* trunk, upper half — joins the box above (on phones, the first one reaches up to the employer card) */}
-      <span
-        className={`absolute -left-5 w-0.5 ${LINE} ${first ? "md:hidden" : ""}`}
-        style={{ top: -GAP / 2 - (first ? GAP / 2 : 0), height: BOX_H / 2 + GAP / 2 + (first ? GAP / 2 : 0) }}
-      />
+      {/* trunk, upper half */}
+      <span className={`absolute -left-5 w-0.5 ${LINE} ${noBusOnWide ? "md:hidden" : ""}`}
+        style={{ top: -reach, height: BOX_H / 2 + reach }} />
       {/* trunk, lower half — runs on to the box below */}
       {!last && (
         <span className={`absolute -left-5 w-0.5 ${LINE}`} style={{ top: BOX_H / 2, height: BOX_H / 2 + GAP / 2 }} />
@@ -77,6 +100,13 @@ function Branch({ first, last, children }: { first: boolean; last: boolean; chil
       {children}
     </div>
   );
+}
+
+/** Split a list into runs of `n`. */
+function chunk<T>(list: T[], n: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < list.length; i += n) out.push(list.slice(i, i + n));
+  return out;
 }
 
 /** One line of the little detail block on an employer card. */
@@ -455,6 +485,9 @@ export default function EmployersDashboard() {
       <div className="space-y-8">
         {visible.map(emp => {
           const placed = helpersByEmployer.get(emp.id) ?? [];
+          // The "+" box is the last slot, so it moves to a new column once the
+          // current one holds five
+          const columns = chunk<Helper | null>([...placed, null], PER_COLUMN);
           return (
             <div key={emp.id} className="flex flex-col md:flex-row md:items-start">
               <div className="w-full md:w-80 flex-shrink-0">
@@ -467,23 +500,45 @@ export default function EmployersDashboard() {
               </div>
 
               {/* The branch. On wide screens a stub leaves the card's right edge
-                  level with the first box; on phones the trunk drops from above. */}
-              <div className="relative flex-1 min-w-0 pl-10 mt-3 md:mt-0 md:max-w-md">
-                <span className={`hidden md:block absolute left-0 w-5 h-0.5 ${LINE}`} style={{ top: BOX_H / 2 - 1 }} />
-                <div className="flex flex-col gap-3">
-                  {placed.map((h, i) => (
-                    <Branch key={h.id} first={i === 0} last={false}>
-                      <HelperCard h={h} busy={busyHelper === h.id} onRemove={() => handleRemove(h, emp)} />
-                    </Branch>
-                  ))}
-                  <Branch first={!placed.length} last>
-                    <button
-                      onClick={() => setAddingTo(emp)}
-                      className="w-full h-[88px] rounded-xl border-2 border-dashed border-slate-400 bg-white/60 text-slate-500 hover:border-blue-400 hover:text-blue-600 hover:bg-blue-50/40 transition-colors flex items-center justify-center gap-2 text-sm font-medium"
-                    >
-                      <span className="text-xl leading-none">＋</span> Add helper
-                    </button>
-                  </Branch>
+                  and meets the first trunk level with the first box; on phones
+                  a short drop joins the card above to the bus. The stubs sit
+                  outside the scroller, which would otherwise clip them. */}
+              <div className="relative flex-1 min-w-0 mt-3 md:mt-0">
+                <span className={`hidden md:block absolute left-0 h-0.5 ${LINE}`}
+                  style={{ top: BUS_SPACE + BOX_H / 2 - 1, width: TRUNK_X }} />
+                <span className={`md:hidden absolute w-0.5 ${LINE}`}
+                  style={{ left: TRUNK_X, top: -12, height: 12 + BUS_Y }} />
+
+                {/* Columns run sideways; too many for the screen scroll rather than wrap */}
+                <div className="overflow-x-auto pb-3">
+                  <div className="flex items-start w-max" style={{ gap: COL_GAP }}>
+                    {columns.map((col, c) => (
+                      <div key={c} className="relative w-72 flex-shrink-0 pl-10 pt-5">
+                        {/* bus — from this trunk across to the next column's */}
+                        {c < columns.length - 1 && (
+                          <span className={`absolute h-0.5 ${LINE}`}
+                            style={{ top: BUS_Y - 1, left: TRUNK_X, width: `calc(100% + ${COL_GAP}px)` }} />
+                        )}
+                        <div className="flex flex-col gap-3">
+                          {col.map((h, i) => (
+                            <Branch key={h?.id ?? "add"} first={i === 0} last={i === col.length - 1}
+                              noBusOnWide={columns.length === 1 && i === 0}>
+                              {h ? (
+                                <HelperCard h={h} busy={busyHelper === h.id} onRemove={() => handleRemove(h, emp)} />
+                              ) : (
+                                <button
+                                  onClick={() => setAddingTo(emp)}
+                                  className="w-full h-[88px] rounded-xl border-2 border-dashed border-slate-400 bg-white/60 text-slate-500 hover:border-blue-400 hover:text-blue-600 hover:bg-blue-50/40 transition-colors flex items-center justify-center gap-2 text-sm font-medium"
+                                >
+                                  <span className="text-xl leading-none">＋</span> Add helper
+                                </button>
+                              )}
+                            </Branch>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </div>
             </div>
