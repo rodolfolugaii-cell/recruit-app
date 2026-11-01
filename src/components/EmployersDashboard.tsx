@@ -205,8 +205,8 @@ function HelperCard({ h, busy, onRemove }: { h: Helper; busy: boolean; onRemove:
         </div>
       </div>
       <button onClick={onRemove} disabled={busy} title="Remove from this employer"
-        className="self-start mt-2 px-1.5 py-0.5 rounded-md text-xs text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors disabled:opacity-40">
-        {busy ? "…" : "✕"}
+        className="flex-shrink-0 px-2.5 py-1 rounded-md text-xs font-semibold text-red-600 bg-white border border-red-200 hover:bg-red-50 hover:border-red-300 transition-colors disabled:opacity-40">
+        {busy ? "Removing…" : "Remove"}
       </button>
     </div>
   );
