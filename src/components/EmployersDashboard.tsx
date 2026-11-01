@@ -183,7 +183,7 @@ function HelperCard({ h, busy, onRemove }: { h: Helper; busy: boolean; onRemove:
   const meta = [h.nationality, age && `${age} yrs`].filter(Boolean).join(" · ");
   return (
     // Left edge matches the board pill: amber for For Review, green for Candidates
-    <div className={`h-[88px] bg-white rounded-xl border border-slate-300 border-l-4 shadow-md px-3 flex items-center gap-3 hover:shadow-lg transition-shadow ${
+    <div className={`relative h-[88px] bg-white rounded-xl border border-slate-300 border-l-4 shadow-md pl-3 pr-8 flex items-center gap-3 hover:shadow-lg transition-shadow ${
       boardOf(h) === "For Review" ? "border-l-amber-400" : "border-l-emerald-400"
     }`}>
       <HelperPhoto h={h} size="w-14 h-14" />
@@ -204,9 +204,11 @@ function HelperCard({ h, busy, onRemove }: { h: Helper; busy: boolean; onRemove:
           )}
         </div>
       </div>
-      <button onClick={onRemove} disabled={busy} title="Remove from this employer"
-        className="flex-shrink-0 px-2.5 py-1 rounded-md text-xs font-semibold text-red-600 bg-white border border-red-200 hover:bg-red-50 hover:border-red-300 transition-colors disabled:opacity-40">
-        {busy ? "Removing…" : "Remove"}
+      <button onClick={onRemove} disabled={busy} title="Remove from this employer" aria-label="Remove from this employer"
+        className="absolute top-2 right-2 w-5 h-5 rounded-md bg-red-500 text-white flex items-center justify-center shadow-sm hover:bg-red-600 transition-colors disabled:opacity-40">
+        <svg className="w-3 h-3" fill="none" viewBox="0 0 12 12">
+          <path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+        </svg>
       </button>
     </div>
   );
