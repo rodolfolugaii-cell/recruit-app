@@ -96,7 +96,8 @@ export default function ContractsDashboard() {
       // Employer names for the cards. A missing employers table just means no
       // names — it must not take the contract list down with it.
       try {
-        setEmployers(new Map((await fetchEmployers()).map(e => [e.id, e])));
+        // Trashed employers included: a contract still names who it was signed with
+        setEmployers(new Map((await fetchEmployers({ includeTrashed: true })).map(e => [e.id, e])));
       } catch { /* leave the map empty */ }
 
       const ids = [...new Set(rows.map(r => r.applicant_id))];

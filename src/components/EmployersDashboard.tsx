@@ -185,7 +185,7 @@ function EmployerCard({
             className="px-2.5 py-1 rounded-md text-xs font-semibold text-blue-600 hover:bg-blue-50 transition-colors">
             Edit
           </button>
-          <button onClick={onDelete} title="Delete employer"
+          <button onClick={onDelete} title="Move to Trash"
             className="px-2 py-1 rounded-md text-xs text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors">
             ✕
           </button>
@@ -266,14 +266,16 @@ function AssignHelperDialog({
   const [q, setQ]         = useState("");
   const [busyId, setBusy] = useState<string | null>(null);
 
-  // Unplaced helpers first — they are the usual answer — then the rest by name
+  // Unplaced helpers first — they are the usual answer — then the rest by name.
+  // A link to a trashed employer is not a placement.
   const list = useMemo(() => {
+    const placed = (h: Helper) => !!h.employer_id && employersById.has(h.employer_id);
     const needle = q.trim().toLowerCase();
     return helpers
       .filter(h => h.employer_id !== employer.id)
       .filter(h => !needle || [h.full_name, h.mobile, h.nationality].some(v => v?.toLowerCase().includes(needle)))
-      .sort((a, b) => Number(!!a.employer_id) - Number(!!b.employer_id) || a.full_name.localeCompare(b.full_name));
-  }, [helpers, employer.id, q]);
+      .sort((a, b) => Number(placed(a)) - Number(placed(b)) || a.full_name.localeCompare(b.full_name));
+  }, [helpers, employer.id, employersById, q]);
 
   const pick = async (h: Helper) => {
     setBusy(h.id);
@@ -453,19 +455,30 @@ export default function EmployersDashboard() {
     setEditing(null);
   };
 
+  /* ── Move to Trash ─────────────────────────────────────────────────────────
+     A soft delete: deleted_at is set and the row stays. The helpers' links are
+     left alone, so Restore on the Trash page brings the whole branch back;
+     until then they count as unassigned everywhere. Only deleting it from the
+     Trash erases the employer for good. ── */
   const handleDelete = async (emp: Employer) => {
     const assigned = helpersByEmployer.get(emp.id)?.length ?? 0;
-    const warning = assigned
-      ? `\n\n${assigned} helper${assigned === 1 ? " is" : "s are"} assigned to this employer. They will be left unassigned.`
+    const note = assigned
+      ? `\n\n${assigned} helper${assigned === 1 ? " is" : "s are"} assigned to this employer. They will show as unassigned until the employer is restored.`
       : "";
-    if (!confirm(`Delete "${emp.name}" permanently?${warning}`)) return;
+    if (!confirm(`Move "${emp.name}" to the Trash?\n\nYou can restore it from the Trash page.${note}`)) return;
     try {
-      const { error: dErr } = await supabase.from("employers").delete().eq("id", emp.id);
-      if (dErr) throw new Error(employerSetupHint(dErr.message) ?? dErr.message);
+      const { error: dErr } = await supabase
+        .from("employers")
+        .update({ deleted_at: new Date().toISOString() })
+        .eq("id", emp.id);
+      if (dErr) {
+        throw new Error(/deleted_at/.test(dErr.message)
+          ? "Moving employers to the Trash needs a one-time database update — run supabase/migrations/20261031000300_employer_trash.sql."
+          : employerSetupHint(dErr.message) ?? dErr.message);
+      }
       setEmployers(prev => prev.filter(e => e.id !== emp.id));
-      setHelpers(list => list.map(h => (h.employer_id === emp.id ? { ...h, employer_id: null } : h)));
     } catch (e) {
-      alert("Could not delete: " + (e instanceof Error ? e.message : String(e)));
+      alert("Could not move to Trash: " + (e instanceof Error ? e.message : String(e)));
     }
   };
 
@@ -479,7 +492,8 @@ export default function EmployersDashboard() {
     );
   }, [employers, helpersByEmployer, search]);
 
-  const unplaced = helpers.filter(h => !h.employer_id).length;
+  // A helper whose employer is in the Trash counts as unassigned
+  const unplaced = helpers.filter(h => !h.employer_id || !employersById.has(h.employer_id)).length;
 
   if (loading) {
     return <div className="text-gray-500 text-sm">Loading employers…</div>;

@@ -90,6 +90,8 @@ export interface Employer {
   address:        string | null;
   status:         string | null;
   employer_data:  EmployerData | null;
+  /** Set when the employer is in the Trash — see 20261031000300_employer_trash.sql */
+  deleted_at?:    string | null;
 }
 
 /** A blank employer, used as the starting draft in the add form. */
@@ -117,13 +119,21 @@ export function employerSetupHint(message: string): string | null {
   return null;
 }
 
-export async function fetchEmployers(): Promise<Employer[]> {
+/**
+ * Every employer not in the Trash. Pass includeTrashed where a trashed one must
+ * still be named — a contract signed with it, say.
+ *
+ * Filtered here rather than in the query so the app keeps working on a database
+ * where the deleted_at migration has not been run yet.
+ */
+export async function fetchEmployers(opts: { includeTrashed?: boolean } = {}): Promise<Employer[]> {
   const { data, error } = await supabase
     .from("employers")
     .select("*")
     .order("created_at", { ascending: false });
   if (error) throw new Error(employerSetupHint(error.message) ?? error.message);
-  return (data ?? []) as Employer[];
+  const rows = (data ?? []) as Employer[];
+  return opts.includeTrashed ? rows : rows.filter(e => !e.deleted_at);
 }
 
 /** Upload a banner or logo and return its public URL. */
