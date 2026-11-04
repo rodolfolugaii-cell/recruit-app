@@ -23,6 +23,7 @@ import ApplicantEditForm, { type EditableApplicant } from "@/components/Applican
 import ZodiacPanel from "@/components/ZodiacPanel";
 import { kidsOf } from "@/lib/kids";
 import { EmployerPicker } from "@/components/EmployerAssign";
+import EmployeeId from "@/components/EmployeeId";
 import {
   createContract, fetchContractForApplicant, placeOfOriginFor, signingLink,
   type Contract,
@@ -56,6 +57,8 @@ export interface ProfileApplicant {
   status: string;
   /** The employer this helper is placed with — null until she is assigned. */
   employer_id?: string | null;
+  /** Five-character ID from the database, e.g. 4K7Q2 — see EmployeeId.tsx */
+  employee_code?: string | null;
   form_data: {
     placeOfBirth?: string;       currentLocation?: string;
     height?: string;             weight?: string;
@@ -346,8 +349,9 @@ Both links, the terms and the witnesses are on the Contracts page.`
           onClick={(e) => e.stopPropagation()}
         >
           <div className="p-3 border-b border-gray-200 flex justify-between items-center gap-4 bg-white">
-            <h2 className="text-xs font-bold text-gray-600 uppercase tracking-widest flex-shrink-0">
+            <h2 className="text-xs font-bold text-gray-600 uppercase tracking-widest flex-shrink-0 flex items-center gap-2">
               {editing ? "Editing Biodata" : "Applicant Biodata"}
+              <EmployeeId code={applicant.employee_code} />
             </h2>
 
             {/* Placement lives here rather than in the edit form: it is not part

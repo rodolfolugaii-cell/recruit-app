@@ -8,6 +8,7 @@ import {
   isPointOverTrash, DELETED_STATUS,
 } from "@/components/TrashZone";
 import { EmployerBadge, useEmployerDirectory } from "@/components/EmployerAssign";
+import EmployeeId from "@/components/EmployeeId";
 import ApplicantProfileModal, { type ProfileApplicant } from "@/components/ApplicantProfileModal";
 
 /** The profile modal owns the full applicant shape — see ApplicantProfileModal.tsx */
@@ -45,6 +46,7 @@ function CardSnapshot({ applicant }: { applicant: Applicant }) {
           )}
         </div>
         <div className="overflow-hidden">
+          <EmployeeId code={applicant.employee_code} className="mb-1.5" />
           <h3 className="font-bold text-gray-900 truncate">{applicant.full_name}</h3>
           <p className="text-xs text-blue-600 font-medium mt-1">{applicant.nationality}</p>
           <span className="inline-block mt-2 text-[10px] bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full font-semibold">
@@ -432,6 +434,7 @@ export default function ForReviewDashboard() {
                     )}
                   </div>
                   <div className="overflow-hidden">
+                    <EmployeeId code={applicant.employee_code} className="mb-1.5" />
                     <h3 className="font-bold text-gray-900 truncate" title={applicant.full_name}>{applicant.full_name}</h3>
                     <p className="text-xs text-blue-600 font-medium mt-1">{applicant.nationality}</p>
                     <span className="inline-block mt-2 text-[10px] bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full font-semibold">

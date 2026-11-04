@@ -44,6 +44,7 @@ interface TrashedApplicant {
   deleted_from: string | null;
   /** Set when /apply trashed a repeat submission — the id of the application kept */
   duplicate_of: string | null;
+  employee_code: string | null;
 }
 
 type TrashedEmployer = Employer & { deleted_at: string | null };
@@ -171,7 +172,7 @@ export default function TrashDashboard() {
       const [h, e] = await Promise.all([
         supabase
           .from("applicants")
-          .select("id, created_at, full_name, nationality, gender, mobile, photo_url, deleted_at, deleted_from, duplicate_of")
+          .select("id, created_at, full_name, nationality, gender, mobile, photo_url, deleted_at, deleted_from, duplicate_of, employee_code")
           .eq("status", DELETED_STATUS)
           .order("deleted_at", { ascending: false, nullsFirst: false }),
         supabase
@@ -400,7 +401,7 @@ export default function TrashDashboard() {
                   Duplicate
                 </span>
               )}
-              subtitle={[item.nationality, item.gender, item.mobile].filter(Boolean).join(" · ")}
+              subtitle={[item.employee_code && `ID ${item.employee_code}`, item.nationality, item.gender, item.mobile].filter(Boolean).join(" · ")}
               origin={`was in ${item.deleted_from === "For Review" ? "For Review" : "Candidates"}`}
               when={trashedWhen(item.deleted_at)}
               busy={busyId === item.id}

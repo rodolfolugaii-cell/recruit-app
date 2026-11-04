@@ -9,6 +9,7 @@ import {
 } from "@/components/TrashZone";
 import { kidsOf } from "@/lib/kids";
 import { EmployerBadge, useEmployerDirectory } from "@/components/EmployerAssign";
+import EmployeeId from "@/components/EmployeeId";
 
 interface WorkExperienceEntry {
   yearsOfEmployment: string; dateFrom: string; dateTo: string;
@@ -30,6 +31,8 @@ interface Applicant {
   status: string;
   /** The employer this helper is placed with — null until she is assigned. */
   employer_id?: string | null;
+  /** Five-character ID from the database, e.g. 4K7Q2 — see EmployeeId.tsx */
+  employee_code?: string | null;
   form_data: {
     placeOfBirth?: string;       currentLocation?: string;
     height?: string;             weight?: string;
@@ -81,6 +84,7 @@ function CardSnapshot({ applicant }: { applicant: Applicant }) {
           )}
         </div>
         <div className="overflow-hidden">
+          <EmployeeId code={applicant.employee_code} className="mb-1.5" />
           <h3 className="font-bold text-gray-900 truncate">{applicant.full_name}</h3>
           <p className="text-xs text-blue-600 font-medium mt-1">{applicant.nationality}</p>
           <span className="inline-block mt-2 text-[10px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full font-semibold">
@@ -556,6 +560,7 @@ export default function RecruiterDashboard() {
                     )}
                   </div>
                   <div className="overflow-hidden">
+                    <EmployeeId code={applicant.employee_code} className="mb-1.5" />
                     <h3 className="font-bold text-gray-900 truncate" title={applicant.full_name}>{applicant.full_name}</h3>
                     <p className="text-xs text-blue-600 font-medium mt-1">{applicant.nationality}</p>
                     <span className="inline-block mt-2 text-[10px] bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full font-semibold">
@@ -689,7 +694,9 @@ export default function RecruiterDashboard() {
             onClick={(e) => e.stopPropagation()}
           >
             <div className="p-3 border-b border-gray-200 flex justify-between items-center bg-white">
-              <h2 className="text-xs font-bold text-gray-600 uppercase tracking-widest">Applicant Biodata</h2>
+              <h2 className="text-xs font-bold text-gray-600 uppercase tracking-widest flex items-center gap-2">
+                Applicant Biodata <EmployeeId code={selectedApplicant.employee_code} />
+              </h2>
               <button onClick={() => setSelected(null)} className="text-gray-400 hover:text-gray-600 text-2xl font-semibold leading-none p-2">&times;</button>
             </div>
 

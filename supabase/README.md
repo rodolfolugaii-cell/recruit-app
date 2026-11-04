@@ -22,6 +22,7 @@ order**. Later files reference tables from earlier ones, so the order matters.
 | `20261031000100_applicant_duplicates.sql` | auto-trash of repeat applications (same name + mobile), the two `/apply` functions for editing an earlier application, and a one-time cleanup of existing duplicates |
 | `20261031000200_uppercase_names.sql` | applicant names kept in CAPITALS by a trigger, and existing names converted |
 | `20261031000300_employer_trash.sql` | `employers.deleted_at` — deleting an employer moves it to the Trash instead of erasing it |
+| `20261104000100_employee_codes.sql` | `applicants.employee_code` — a unique 5-character ID (e.g. `4K7Q2`) given to every helper on insert, and to every existing helper |
 
 **They are safe to re-run and safe on the live database.** Every table is
 `CREATE TABLE IF NOT EXISTS`, every later column is a separate

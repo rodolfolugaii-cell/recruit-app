@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import EmployerForm from "@/components/EmployerForm";
 import ApplicantProfileModal, { type ProfileApplicant } from "@/components/ApplicantProfileModal";
+import EmployeeId from "@/components/EmployeeId";
 import { supabase } from "@/lib/supabase";
 import { ageFrom } from "@/lib/formDates";
 import {
@@ -42,10 +43,11 @@ interface Helper {
   status:          string | null;
   employer_id:     string | null;
   contract_status: string | null;
+  employee_code:   string | null;
 }
 
 const HELPER_COLUMNS =
-  "id, full_name, nationality, gender, mobile, photo_url, date_of_birth, status, employer_id, " +
+  "id, full_name, nationality, gender, mobile, photo_url, date_of_birth, status, employer_id, employee_code, " +
   "contract_status:form_data->>contractStatus";
 
 /** Which board a helper sits on — null status is a fresh submission on Candidates. */
@@ -226,7 +228,10 @@ function HelperCard({
     >
       <HelperPhoto h={h} size="w-14 h-14" />
       <div className="min-w-0 flex-1">
-        <p className="font-semibold text-sm text-gray-900 truncate" title={h.full_name}>{h.full_name}</p>
+        <p className="font-semibold text-sm text-gray-900 truncate flex items-center gap-1.5" title={h.full_name}>
+          <EmployeeId code={h.employee_code} className="flex-shrink-0" />
+          <span className="truncate">{h.full_name}</span>
+        </p>
         <p className="text-xs text-blue-600 truncate">{meta || "—"}</p>
         {h.mobile && <p className="text-[11px] text-gray-500 truncate">{h.mobile}</p>}
         <div className="mt-0.5 flex items-center gap-1 min-w-0">
@@ -273,7 +278,7 @@ function AssignHelperDialog({
     const needle = q.trim().toLowerCase();
     return helpers
       .filter(h => h.employer_id !== employer.id)
-      .filter(h => !needle || [h.full_name, h.mobile, h.nationality].some(v => v?.toLowerCase().includes(needle)))
+      .filter(h => !needle || [h.full_name, h.mobile, h.nationality, h.employee_code].some(v => v?.toLowerCase().includes(needle)))
       .sort((a, b) => Number(placed(a)) - Number(placed(b)) || a.full_name.localeCompare(b.full_name));
   }, [helpers, employer.id, employersById, q]);
 
@@ -290,7 +295,7 @@ function AssignHelperDialog({
           <p className="text-xs text-gray-500 mt-0.5 truncate">to <span className="font-semibold text-gray-700">{employer.name}</span></p>
           <input
             autoFocus value={q} onChange={e => setQ(e.target.value)}
-            placeholder="Search by name, mobile or nationality…"
+            placeholder="Search by name, ID, mobile or nationality…"
             className="mt-3 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none text-gray-900 bg-white"
           />
         </div>
@@ -303,7 +308,10 @@ function AssignHelperDialog({
                 className="w-full px-5 py-2.5 flex items-center gap-3 text-left hover:bg-blue-50/60 transition-colors disabled:opacity-50">
                 <HelperPhoto h={h} size="w-10 h-10" />
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold text-gray-900 truncate">{h.full_name}</p>
+                  <p className="text-sm font-semibold text-gray-900 truncate flex items-center gap-1.5">
+                    <EmployeeId code={h.employee_code} className="flex-shrink-0" />
+                    <span className="truncate">{h.full_name}</span>
+                  </p>
                   <p className="text-[11px] text-gray-500 truncate">
                     {[h.nationality, h.mobile, boardOf(h)].filter(Boolean).join(" · ")}
                   </p>
@@ -428,6 +436,7 @@ export default function EmployersDashboard() {
       date_of_birth:   u.date_of_birth ?? null,
       employer_id:     u.employer_id ?? null,
       contract_status: u.form_data?.contractStatus || null,
+      employee_code:   u.employee_code ?? null,
     })));
   }, []);
 
@@ -488,7 +497,8 @@ export default function EmployersDashboard() {
     if (!q) return employers;
     return employers.filter(e =>
       [e.name, e.contact_person, e.address, e.email, e.phone].some(v => v?.toLowerCase().includes(q)) ||
-      (helpersByEmployer.get(e.id) ?? []).some(h => h.full_name.toLowerCase().includes(q))
+      (helpersByEmployer.get(e.id) ?? []).some(h =>
+        h.full_name.toLowerCase().includes(q) || !!h.employee_code?.toLowerCase().includes(q))
     );
   }, [employers, helpersByEmployer, search]);
 
