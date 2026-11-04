@@ -90,6 +90,8 @@ export interface Employer {
   address:        string | null;
   status:         string | null;
   employer_data:  EmployerData | null;
+  /** The employer's own ID, typed on the form — see 20261104000200_employer_codes.sql */
+  employer_code?: string | null;
   /** Set when the employer is in the Trash — see 20261031000300_employer_trash.sql */
   deleted_at?:    string | null;
 }
@@ -97,7 +99,7 @@ export interface Employer {
 /** A blank employer, used as the starting draft in the add form. */
 export function emptyEmployer(): Omit<Employer, "id" | "created_at"> {
   return {
-    name: "", banner_url: null, logo_url: null, contact_person: null,
+    name: "", employer_code: null, banner_url: null, logo_url: null, contact_person: null,
     phone: null, email: null, address: null, status: "Active",
     employer_data: {
       flatSizeUnit: "sq ft", servantRoomUnit: "sq ft", partitionUnit: "sq ft",

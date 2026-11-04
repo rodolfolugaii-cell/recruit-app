@@ -10,6 +10,8 @@ import {
 import { kidsOf } from "@/lib/kids";
 import { EmployerBadge, useEmployerDirectory } from "@/components/EmployerAssign";
 import EmployeeId from "@/components/EmployeeId";
+import Pagination from "@/components/Pagination";
+import { invalidatePaged, loadPage, needsRevalidate, pageCountFor } from "@/lib/pagedCache";
 
 interface WorkExperienceEntry {
   yearsOfEmployment: string; dateFrom: string; dateTo: string;
@@ -208,6 +210,23 @@ function BiodataWE({ entry }: { entry: WorkExperienceEntry | null }) {
 }
 
 
+/* ── One page of the Candidates board ─────────────────────────────────────────
+   Everything not For Review and not in the Trash, newest first. Only the page
+   on screen is fetched (and so only its photos load); pagedCache keeps each
+   page once seen. ── */
+const CANDIDATES_KEY = "applicants:candidates";
+
+async function fetchCandidatesPage(from: number, to: number) {
+  const { data, error, count } = await supabase
+    .from("applicants")
+    .select("*", { count: "exact" })
+    .or(`status.is.null,status.not.in.("For Review","${DELETED_STATUS}")`)
+    .order("created_at", { ascending: false })
+    .range(from, to);
+  if (error) throw error;
+  return { rows: (data ?? []) as Applicant[], total: count ?? 0 };
+}
+
 export default function RecruiterDashboard() {
   const [applicants, setApplicants]         = useState<Applicant[]>([]);
   const [loading, setLoading]               = useState(true);
@@ -218,6 +237,14 @@ export default function RecruiterDashboard() {
   const [pressingId, setPressingId]         = useState<string | null>(null);
   const [dragState, setDragState]           = useState<DragState | null>(null);
   const [sortedIds, setSortedIds]           = useState<string[]>([]);
+
+  /* ── Pages ── */
+  const [page, setPage]                     = useState(1);
+  const [total, setTotal]                   = useState(0);
+  const [pageLoading, setPageLoading]       = useState(false);
+  // Bumped after a change here, so the open page refetches and refills to 15
+  const [reloadKey, setReloadKey]           = useState(0);
+  const rootRef = useRef<HTMLDivElement>(null);
 
   /* ── Trash ── */
   const [confirmDelete, setConfirmDelete]   = useState<Applicant | null>(null);
@@ -237,26 +264,46 @@ export default function RecruiterDashboard() {
   useEffect(() => { sortedRef.current = sortedIds; }, [sortedIds]);
   useEffect(() => { applicantsRef.current = applicants; }, [applicants]);
 
-  /* ── Fetch ── */
+  /* ── Fetch the page on screen (from the cache when it has been seen) ── */
   useEffect(() => {
+    let alive = true;
     (async () => {
       try {
-        const { data, error } = await supabase
-          .from("applicants")
-          .select("*")
-          .order("created_at", { ascending: false });
-        if (error) throw error;
-        const filtered = (data || []).filter(
-          (a) => a.status !== "For Review" && a.status !== DELETED_STATUS
-        );
-        setApplicants(filtered);
-        setSortedIds(filtered.map((a) => a.id));
-      } catch (e: any) {
-        console.error(e.message);
+        let res = await loadPage(CANDIDATES_KEY, page, fetchCandidatesPage);
+        if (!alive) return;
+        // Removing the last card on the last page leaves it empty — step back
+        if (!res.rows.length && page > 1) { setPage(pageCountFor(res.total)); return; }
+        const show = (r: typeof res) => {
+          setApplicants(r.rows);
+          setSortedIds(r.rows.map((a) => a.id));
+          setTotal(r.total);
+        };
+        show(res);
+        // An older cached page is shown at once, then re-checked in the background
+        if (needsRevalidate(res)) {
+          setLoading(false);
+          res = await loadPage(CANDIDATES_KEY, page, fetchCandidatesPage, { force: true });
+          if (alive) show(res);
+        }
+      } catch (e) {
+        console.error(e instanceof Error ? e.message : e);
       } finally {
-        setLoading(false);
+        if (alive) { setLoading(false); setPageLoading(false); }
       }
     })();
+    return () => { alive = false; };
+  }, [page, reloadKey]);
+
+  const goToPage = useCallback((p: number) => {
+    setPageLoading(true);
+    setPage(p);
+    rootRef.current?.scrollIntoView({ block: "start" });
+  }, []);
+
+  /** A card moved boards or bins: every applicant list is now out of date. */
+  const listsChanged = useCallback(() => {
+    invalidatePaged("applicants:");
+    setReloadKey((k) => k + 1);
   }, []);
 
   /* ── Send for Review (also called from drag-drop) ── */
@@ -271,12 +318,13 @@ export default function RecruiterDashboard() {
       setApplicants((p) => p.filter((a) => a.id !== id));
       setSortedIds((p) => p.filter((i) => i !== id));
       setSelected((p) => (p?.id === id ? null : p));
+      listsChanged();
     } catch (err: any) {
       alert("Failed to send for review: " + err.message);
     } finally {
       setSendingId(null);
     }
-  }, []);
+  }, [listsChanged]);
 
   /* ── Trash (soft delete) ──────────────────────────────────────────────────
      Sets status to "Deleted" rather than removing the row, so a mis-drop is
@@ -302,6 +350,7 @@ export default function RecruiterDashboard() {
       setSelected((p) => (p?.id === target.id ? null : p));
       setConfirmDelete(null);
       setPendingUndo({ applicant: target, index, prevStatus: target.status || "New" });
+      listsChanged();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       alert(/deleted_at|deleted_from/.test(msg)
@@ -311,7 +360,7 @@ export default function RecruiterDashboard() {
     } finally {
       setDeleting(false);
     }
-  }, [confirmDelete]);
+  }, [confirmDelete, listsChanged]);
 
   const handleUndoDelete = useCallback(async () => {
     const u = pendingUndo;
@@ -332,12 +381,13 @@ export default function RecruiterDashboard() {
         return next;
       });
       setPendingUndo(null);
+      listsChanged();
     } catch (err) {
       alert("Failed to restore: " + (err instanceof Error ? err.message : String(err)));
     } finally {
       setUndoing(false);
     }
-  }, [pendingUndo]);
+  }, [pendingUndo, listsChanged]);
 
   const dismissUndo = useCallback(() => setPendingUndo(null), []);
 
@@ -489,7 +539,7 @@ export default function RecruiterDashboard() {
   if (loading) return <div className="text-center py-12 text-gray-500">Loading submissions...</div>;
 
   return (
-    <div>
+    <div ref={rootRef} className="scroll-mt-4">
       {applicants.length === 0 ? (
         <div className="text-center py-12 bg-white rounded-lg border border-gray-200 p-8 text-gray-500">
           No new submissions. All candidates may have been sent for review!
@@ -628,6 +678,14 @@ export default function RecruiterDashboard() {
           })}
         </div>
       )}
+
+      <Pagination
+        page={page}
+        pageCount={pageCountFor(total)}
+        total={total}
+        busy={pageLoading}
+        onChange={goToPage}
+      />
 
       {/* ── Drag ghost portal ─────────────────────────────────────────────────
           Outer div: follows cursor (no transition — updates every mousemove)

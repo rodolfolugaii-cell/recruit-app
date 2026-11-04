@@ -12,8 +12,10 @@
  * not let her sign as the employer.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ContractTermsForm from "@/components/ContractTermsForm";
+import Pagination from "@/components/Pagination";
+import { pageCountFor, pageSlice } from "@/lib/pagedCache";
 import { supabase } from "@/lib/supabase";
 import {
   fetchContracts, signingLink, signingProgress, updateContract,
@@ -86,6 +88,9 @@ export default function ContractsDashboard() {
   const [loading, setLoading]     = useState(true);
   const [error, setError]         = useState<string | null>(null);
   const [editing, setEditing]     = useState<Contract | null>(null);
+  // 15 contracts a page; only the page on screen renders, so only its logos load
+  const [page, setPage]           = useState(1);
+  const rootRef = useRef<HTMLDivElement>(null);
 
   const load = useCallback(async () => {
     setError(null);
@@ -166,10 +171,13 @@ export default function ContractsDashboard() {
     [contracts],
   );
 
+  const pageCount = pageCountFor(sorted.length);
+  const pageNow   = Math.min(page, pageCount);
+
   if (loading) return <div className="text-gray-500 text-sm">Loading contracts…</div>;
 
   return (
-    <div>
+    <div ref={rootRef} className="scroll-mt-4">
       {error && (
         <div className="mb-6 p-4 rounded-lg bg-red-50 border border-red-100 text-sm text-red-700">{error}</div>
       )}
@@ -187,7 +195,7 @@ export default function ContractsDashboard() {
       )}
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-        {sorted.map(c => {
+        {pageSlice(sorted, pageNow).map(c => {
           const emp  = c.employer_id ? employers.get(c.employer_id) : null;
           const tint = employerTint(emp?.name ?? "—");
           return (
@@ -209,6 +217,7 @@ export default function ContractsDashboard() {
                   </h3>
                   <p className="text-xs text-gray-500 truncate">
                     {emp?.name ?? "No employer"}
+                    {emp?.employer_code ? ` (ID ${emp.employer_code})` : ""}
                     {c.terms?.wages ? ` · HK$ ${c.terms.wages}/month` : ""}
                   </p>
                 </div>
@@ -259,6 +268,13 @@ export default function ContractsDashboard() {
           );
         })}
       </div>
+
+      <Pagination
+        page={pageNow}
+        pageCount={pageCount}
+        total={sorted.length}
+        onChange={p => { setPage(p); rootRef.current?.scrollIntoView({ block: "start" }); }}
+      />
 
       {editing && (
         <div className="fixed inset-0 z-50 bg-black/50 flex items-start justify-center p-4 overflow-y-auto"

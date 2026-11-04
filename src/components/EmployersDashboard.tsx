@@ -14,10 +14,12 @@
  * they are off both boards, so drawing them here would only mislead.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import EmployerForm from "@/components/EmployerForm";
 import ApplicantProfileModal, { type ProfileApplicant } from "@/components/ApplicantProfileModal";
-import EmployeeId from "@/components/EmployeeId";
+import EmployeeId, { EmployerId } from "@/components/EmployeeId";
+import Pagination from "@/components/Pagination";
+import { PAGE_SIZE, invalidatePaged, pageCountFor, pageSlice } from "@/lib/pagedCache";
 import { supabase } from "@/lib/supabase";
 import { ageFrom } from "@/lib/formDates";
 import {
@@ -60,7 +62,7 @@ const boardOf = (h: Helper) => (h.status === "For Review" ? "For Review" : "Cand
 
    Every box is BOX_H tall with GAP between them, and every column is the same
    width, so all the lines are placed with fixed offsets instead of measuring
-   the DOM. Keep these in step with the h-[88px] / gap-3 / w-72 / pl-10 / pt-5
+   the DOM. Keep these in step with the h-[104px] / gap-3 / w-72 / pl-10 / pt-5
    classes below.
 
         stub ─┬──────────────── bus ─────────┬──
@@ -68,7 +70,7 @@ const boardOf = (h: Helper) => (h.status === "For Review" ? "For Review" : "Cand
               ├─ box          …               └─ ＋
               └─ box (5th)                                                   */
 const PER_COLUMN = 5;
-const BOX_H      = 88;
+const BOX_H      = 104;
 const GAP        = 12;
 const COL_GAP    = 40;   // between columns
 const BUS_SPACE  = 20;   // pt-5 — room above the boxes for the bus
@@ -162,7 +164,8 @@ function EmployerCard({
             <span className={`text-sm font-black ${tint.text}`}>{employerInitials(emp.name)}</span>
           )}
         </div>
-        <h3 className="mt-2 font-bold text-gray-900 truncate" title={emp.name}>{emp.name}</h3>
+        <EmployerId code={emp.employer_code} className="mt-2" />
+        <h3 className="mt-1.5 font-bold text-gray-900 truncate" title={emp.name}>{emp.name}</h3>
         {emp.contact_person && (
           <p className="text-xs text-blue-600 font-medium mt-0.5 truncate">{emp.contact_person}</p>
         )}
@@ -222,16 +225,14 @@ function HelperCard({
       role="button" tabIndex={0} title="View full profile"
       onClick={onOpen}
       onKeyDown={e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(); } }}
-      className={`relative h-[88px] bg-white rounded-xl border border-slate-300 border-l-4 shadow-md pl-3 pr-8 flex items-center gap-3 cursor-pointer hover:shadow-lg hover:border-slate-400 transition-shadow focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 ${
+      className={`relative h-[104px] bg-white rounded-xl border border-slate-300 border-l-4 shadow-md pl-3 pr-8 flex items-center gap-3 cursor-pointer hover:shadow-lg hover:border-slate-400 transition-shadow focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 ${
         boardOf(h) === "For Review" ? "border-l-amber-400" : "border-l-emerald-400"
       } ${opening ? "opacity-60" : ""}`}
     >
       <HelperPhoto h={h} size="w-14 h-14" />
       <div className="min-w-0 flex-1">
-        <p className="font-semibold text-sm text-gray-900 truncate flex items-center gap-1.5" title={h.full_name}>
-          <EmployeeId code={h.employee_code} className="flex-shrink-0" />
-          <span className="truncate">{h.full_name}</span>
-        </p>
+        <EmployeeId code={h.employee_code} className="mb-1" />
+        <p className="font-semibold text-sm text-gray-900 truncate" title={h.full_name}>{h.full_name}</p>
         <p className="text-xs text-blue-600 truncate">{meta || "—"}</p>
         {h.mobile && <p className="text-[11px] text-gray-500 truncate">{h.mobile}</p>}
         <div className="mt-0.5 flex items-center gap-1 min-w-0">
@@ -343,6 +344,10 @@ export default function EmployersDashboard() {
   const [loading, setLoading]     = useState(true);
   const [error, setError]         = useState<string | null>(null);
   const [search, setSearch]       = useState("");
+  // 15 employers a page. Employer rows are light, so they are all loaded and
+  // split here; only the page on screen renders, so only its images load.
+  const [page, setPage]           = useState(1);
+  const rootRef = useRef<HTMLDivElement>(null);
   const [busyHelper, setBusyHelper] = useState<string | null>(null);
 
   // null = closed; "new" = adding; an Employer = editing that one
@@ -394,6 +399,7 @@ export default function EmployersDashboard() {
       .eq("id", helperId);
     if (uErr) throw uErr;
     setHelpers(list => list.map(h => (h.id === helperId ? { ...h, employer_id: employerId } : h)));
+    invalidatePaged("applicants:");   // the boards' cards show the employer badge
   }, []);
 
   const handleAssign = useCallback(async (h: Helper) => {
@@ -426,6 +432,7 @@ export default function EmployersDashboard() {
   // an edited name or a new employer moves the card without a reload
   const handleProfileChange = useCallback((u: ProfileApplicant) => {
     setProfile(u);
+    invalidatePaged("applicants:");   // the boards' cached cards are now out of date
     setHelpers(list => list.map(h => (h.id !== u.id ? h : {
       ...h,
       full_name:       u.full_name,
@@ -496,13 +503,18 @@ export default function EmployersDashboard() {
     const q = search.trim().toLowerCase();
     if (!q) return employers;
     return employers.filter(e =>
-      [e.name, e.contact_person, e.address, e.email, e.phone].some(v => v?.toLowerCase().includes(q)) ||
+      [e.name, e.employer_code, e.contact_person, e.address, e.email, e.phone].some(v => v?.toLowerCase().includes(q)) ||
       (helpersByEmployer.get(e.id) ?? []).some(h =>
         h.full_name.toLowerCase().includes(q) || !!h.employee_code?.toLowerCase().includes(q))
     );
   }, [employers, helpersByEmployer, search]);
 
   // A helper whose employer is in the Trash counts as unassigned
+  // A delete can leave the page past the end — show the last one instead
+  const pageCount = pageCountFor(visible.length);
+  const pageNow   = Math.min(page, pageCount);
+  const onPage    = pageSlice(visible, pageNow, PAGE_SIZE);
+
   const unplaced = helpers.filter(h => !h.employer_id || !employersById.has(h.employer_id)).length;
 
   if (loading) {
@@ -510,12 +522,12 @@ export default function EmployersDashboard() {
   }
 
   return (
-    <div>
+    <div ref={rootRef} className="scroll-mt-4">
       {/* ── Toolbar ── */}
       <div className="flex flex-wrap items-center gap-3 mb-6">
         <input
           value={search}
-          onChange={e => setSearch(e.target.value)}
+          onChange={e => { setSearch(e.target.value); setPage(1); }}
           placeholder="Search employers or helpers…"
           className="flex-1 min-w-[200px] max-w-sm rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none text-gray-900 bg-white"
         />
@@ -557,7 +569,7 @@ export default function EmployersDashboard() {
 
       {/* ── Brackets: employer → branch → helpers ── */}
       <div className="space-y-8">
-        {visible.map(emp => {
+        {onPage.map(emp => {
           const placed = helpersByEmployer.get(emp.id) ?? [];
           // The "+" box is the last slot, so it moves to a new column once the
           // current one holds five
@@ -608,7 +620,7 @@ export default function EmployersDashboard() {
                               ) : (
                                 <button
                                   onClick={() => setAddingTo(emp)}
-                                  className="w-full h-[88px] rounded-xl border-2 border-dashed border-slate-400 bg-white/60 text-slate-500 hover:border-blue-400 hover:text-blue-600 hover:bg-blue-50/40 transition-colors flex items-center justify-center gap-2 text-sm font-medium"
+                                  className="w-full h-[104px] rounded-xl border-2 border-dashed border-slate-400 bg-white/60 text-slate-500 hover:border-blue-400 hover:text-blue-600 hover:bg-blue-50/40 transition-colors flex items-center justify-center gap-2 text-sm font-medium"
                                 >
                                   <span className="text-xl leading-none">＋</span> Add helper
                                 </button>
@@ -625,6 +637,13 @@ export default function EmployersDashboard() {
           );
         })}
       </div>
+
+      <Pagination
+        page={pageNow}
+        pageCount={pageCount}
+        total={visible.length}
+        onChange={p => { setPage(p); rootRef.current?.scrollIntoView({ block: "start" }); }}
+      />
 
       {/* ── Add helper picker ── */}
       {addingTo && (

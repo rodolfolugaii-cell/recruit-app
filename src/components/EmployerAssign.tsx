@@ -135,7 +135,9 @@ export function EmployerPicker({
           className="min-w-0 flex-1 rounded-md border border-gray-300 px-2 py-1.5 text-sm focus:border-blue-500 focus:outline-none text-gray-900 bg-white disabled:opacity-50"
         >
           <option value="">— Unassigned —</option>
-          {employers.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
+          {employers.map(e => (
+            <option key={e.id} value={e.id}>{e.employer_code ? `${e.employer_code} — ${e.name}` : e.name}</option>
+          ))}
           {onCreateFromSheet && (
             <option value={NEW_EMPLOYER}>+ New employer from this contract…</option>
           )}

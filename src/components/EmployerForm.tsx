@@ -158,6 +158,8 @@ export default function EmployerForm({
 
       const row = {
         name:           draft.name.trim(),
+        // Capitals, and blank as null — the database tidies it the same way
+        employer_code:  draft.employer_code?.trim().toUpperCase() || null,
         banner_url:     draft.banner_url,
         logo_url:       draft.logo_url,
         contact_person: draft.contact_person || null,
@@ -173,7 +175,15 @@ export default function EmployerForm({
         : supabase.from("employers").insert(row).select().single();
 
       const { data, error } = await query;
-      if (error) throw new Error(employerSetupHint(error.message) ?? error.message);
+      if (error) {
+        if (/employers_employer_code_idx|duplicate key/i.test(error.message)) {
+          throw new Error(`Another employer already has the ID "${row.employer_code}".`);
+        }
+        if (/employer_code/.test(error.message)) {
+          throw new Error("Employer IDs need a one-time database update — run supabase/migrations/20261104000200_employer_codes.sql.");
+        }
+        throw new Error(employerSetupHint(error.message) ?? error.message);
+      }
       onSaved(data as Employer);
     } catch (err) {
       alert("Failed to save: " + (err instanceof Error ? err.message : String(err)));
@@ -220,6 +230,10 @@ export default function EmployerForm({
         {/* ── Employer ── */}
         <Section title="Employer" />
         <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+          <Field label="Employer ID">
+            <input value={draft.employer_code ?? ""} onChange={e => setTop("employer_code", e.target.value.toUpperCase())}
+              placeholder="e.g. EMP0123" className={`${inp} font-mono tracking-wider`} />
+          </Field>
           <Field label="Employer Name *">
             <input value={draft.name} onChange={e => setTop("name", e.target.value)}
               placeholder="e.g. JP Morgan" className={inp} />

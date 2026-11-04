@@ -27,10 +27,12 @@
  * ────────────────────────────────────────────────────────────────────────────
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { DELETED_STATUS, PHOTO_BUCKET, storagePathFromUrl } from "@/components/TrashZone";
 import { employerInitials, employerTint, type Employer } from "@/lib/employers";
+import Pagination from "@/components/Pagination";
+import { invalidatePaged, pageCountFor, pageSlice } from "@/lib/pagedCache";
 
 interface TrashedApplicant {
   id: string;
@@ -149,6 +151,9 @@ function TrashRow({
 
 export default function TrashDashboard() {
   const [section, setSection]   = useState<Section>("helpers");
+  // 15 rows a page, kept per section so switching tabs does not lose your place
+  const [pages, setPages]       = useState<Record<Section, number>>({ helpers: 1, employers: 1 });
+  const rootRef = useRef<HTMLDivElement>(null);
   const [helpers, setHelpers]   = useState<TrashedApplicant[]>([]);
   const [employers, setEmployers] = useState<TrashedEmployer[]>([]);
   // How many helpers still point at each trashed employer — restoring reconnects them
@@ -220,6 +225,7 @@ export default function TrashDashboard() {
         .eq("id", item.id);
       if (error) throw error;
       setHelpers((p) => p.filter((i) => i.id !== item.id));
+      invalidatePaged("applicants:");   // back on a board — its cached pages are stale
     } catch (e) {
       alert("Failed to restore: " + errText(e));
     } finally {
@@ -231,7 +237,13 @@ export default function TrashDashboard() {
     setBusyId(item.id);
     try {
       const { error } = await supabase.from("employers").update({ deleted_at: null }).eq("id", item.id);
-      if (error) throw error;
+      if (error) {
+        // IDs only have to be unique among live employers, so one may have
+        // been re-used while this employer sat in the Trash
+        throw new Error(/employers_employer_code_idx|duplicate key/i.test(error.message)
+          ? `Another employer is now using the ID ${item.employer_code}. Change that employer's ID first, then restore this one.`
+          : error.message);
+      }
       setEmployers((p) => p.filter((i) => i.id !== item.id));
     } catch (e) {
       alert("Failed to restore: " + errText(e));
@@ -295,6 +307,15 @@ export default function TrashDashboard() {
   if (loading) return <div className="text-center py-12 text-gray-500">Loading trash…</div>;
 
   const total = helpers.length + employers.length;
+
+  // A delete can leave a section past its last page — show the last one instead
+  const list      = section === "helpers" ? helpers.length : employers.length;
+  const pageCount = pageCountFor(list);
+  const pageNow   = Math.min(pages[section], pageCount);
+  const goToPage  = (p: number) => {
+    setPages((prev) => ({ ...prev, [section]: p }));
+    rootRef.current?.scrollIntoView({ block: "start" });
+  };
   const err   = section === "helpers" ? helperErr : employerErr;
 
   const emptyBody = [
@@ -310,7 +331,7 @@ export default function TrashDashboard() {
         : "");
 
   return (
-    <div className="space-y-4">
+    <div ref={rootRef} className="space-y-4 scroll-mt-4">
 
       {/* ── Header: sections + Empty Trash ── */}
       <div className="flex flex-wrap items-center gap-3 pb-4 border-b border-gray-200">
@@ -385,7 +406,7 @@ export default function TrashDashboard() {
       {/* ── Helpers ── */}
       {!err && section === "helpers" && helpers.length > 0 && (
         <div className="bg-white border border-gray-200 rounded-xl divide-y divide-gray-100 overflow-hidden">
-          {helpers.map((item) => (
+          {pageSlice(helpers, pageNow).map((item) => (
             <TrashRow
               key={item.id}
               thumb={item.photo_url ? (
@@ -415,7 +436,7 @@ export default function TrashDashboard() {
       {/* ── Employers ── */}
       {!err && section === "employers" && employers.length > 0 && (
         <div className="bg-white border border-gray-200 rounded-xl divide-y divide-gray-100 overflow-hidden">
-          {employers.map((item) => {
+          {pageSlice(employers, pageNow).map((item) => {
             const tint = employerTint(item.name);
             const n    = linked[item.id] ?? 0;
             return (
@@ -430,7 +451,7 @@ export default function TrashDashboard() {
                   </div>
                 )}
                 title={item.name}
-                subtitle={[item.contact_person, item.phone, item.email].filter(Boolean).join(" · ")}
+                subtitle={[item.employer_code && `ID ${item.employer_code}`, item.contact_person, item.phone, item.email].filter(Boolean).join(" · ")}
                 origin={n ? `${n} helper${n === 1 ? "" : "s"} linked` : "no helpers"}
                 when={trashedWhen(item.deleted_at)}
                 busy={busyId === item.id}
@@ -441,6 +462,8 @@ export default function TrashDashboard() {
           })}
         </div>
       )}
+
+      {!err && <Pagination page={pageNow} pageCount={pageCount} total={list} onChange={goToPage} />}
 
       <DangerConfirm
         open={!!purgeTarget}

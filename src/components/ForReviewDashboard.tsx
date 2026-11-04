@@ -9,6 +9,8 @@ import {
 } from "@/components/TrashZone";
 import { EmployerBadge, useEmployerDirectory } from "@/components/EmployerAssign";
 import EmployeeId from "@/components/EmployeeId";
+import Pagination from "@/components/Pagination";
+import { invalidatePaged, loadPage, needsRevalidate, pageCountFor } from "@/lib/pagedCache";
 import ApplicantProfileModal, { type ProfileApplicant } from "@/components/ApplicantProfileModal";
 
 /** The profile modal owns the full applicant shape — see ApplicantProfileModal.tsx */
@@ -77,6 +79,22 @@ function CardSnapshot({ applicant }: { applicant: Applicant }) {
 
 
 
+/* ── One page of the For Review board ─────────────────────────────────────────
+   Only the page on screen is fetched (and so only its photos load);
+   pagedCache keeps each page once seen. ── */
+const REVIEW_KEY = "applicants:review";
+
+async function fetchReviewPage(from: number, to: number) {
+  const { data, error, count } = await supabase
+    .from("applicants")
+    .select("*", { count: "exact" })
+    .eq("status", "For Review")
+    .order("created_at", { ascending: false })
+    .range(from, to);
+  if (error) throw error;
+  return { rows: (data ?? []) as Applicant[], total: count ?? 0 };
+}
+
 export default function ForReviewDashboard() {
   const [applicants, setApplicants]      = useState<Applicant[]>([]);
   const [loading, setLoading]            = useState(true);
@@ -87,6 +105,14 @@ export default function ForReviewDashboard() {
   const [pressingId, setPressingId]      = useState<string | null>(null);
   const [dragState, setDragState]        = useState<DragState | null>(null);
   const [sortedIds, setSortedIds]        = useState<string[]>([]);
+
+  /* ── Pages ── */
+  const [page, setPage]                  = useState(1);
+  const [total, setTotal]                = useState(0);
+  const [pageLoading, setPageLoading]    = useState(false);
+  // Bumped after a change here, so the open page refetches and refills to 15
+  const [reloadKey, setReloadKey]        = useState(0);
+  const rootRef = useRef<HTMLDivElement>(null);
 
 
   /* ── Trash ── */
@@ -106,24 +132,46 @@ export default function ForReviewDashboard() {
   useEffect(() => { sortedRef.current = sortedIds; }, [sortedIds]);
   useEffect(() => { applicantsRef.current = applicants; }, [applicants]);
 
-  /* ── Fetch ── */
+  /* ── Fetch the page on screen (from the cache when it has been seen) ── */
   useEffect(() => {
+    let alive = true;
     (async () => {
       try {
-        const { data, error } = await supabase
-          .from("applicants")
-          .select("*")
-          .eq("status", "For Review")
-          .order("created_at", { ascending: false });
-        if (error) throw error;
-        setApplicants(data || []);
-        setSortedIds((data || []).map((a) => a.id));
-      } catch (e: any) {
-        console.error(e.message);
+        let res = await loadPage(REVIEW_KEY, page, fetchReviewPage);
+        if (!alive) return;
+        // Removing the last card on the last page leaves it empty — step back
+        if (!res.rows.length && page > 1) { setPage(pageCountFor(res.total)); return; }
+        const show = (r: typeof res) => {
+          setApplicants(r.rows);
+          setSortedIds(r.rows.map((a) => a.id));
+          setTotal(r.total);
+        };
+        show(res);
+        // An older cached page is shown at once, then re-checked in the background
+        if (needsRevalidate(res)) {
+          setLoading(false);
+          res = await loadPage(REVIEW_KEY, page, fetchReviewPage, { force: true });
+          if (alive) show(res);
+        }
+      } catch (e) {
+        console.error(e instanceof Error ? e.message : e);
       } finally {
-        setLoading(false);
+        if (alive) { setLoading(false); setPageLoading(false); }
       }
     })();
+    return () => { alive = false; };
+  }, [page, reloadKey]);
+
+  const goToPage = useCallback((p: number) => {
+    setPageLoading(true);
+    setPage(p);
+    rootRef.current?.scrollIntoView({ block: "start" });
+  }, []);
+
+  /** A card moved boards or bins: every applicant list is now out of date. */
+  const listsChanged = useCallback(() => {
+    invalidatePaged("applicants:");
+    setReloadKey((k) => k + 1);
   }, []);
 
   /* ── Move back to Candidates (also called from drag-drop) ── */
@@ -138,12 +186,13 @@ export default function ForReviewDashboard() {
       setApplicants((p) => p.filter((a) => a.id !== id));
       setSortedIds((p) => p.filter((i) => i !== id));
       setSelected((p) => (p?.id === id ? null : p));
+      listsChanged();
     } catch (err: any) {
       alert("Failed to move back: " + err.message);
     } finally {
       setMovingBackId(null);
     }
-  }, []);
+  }, [listsChanged]);
 
   /* ── Trash (soft delete) ──────────────────────────────────────────────────
      Sets status to "Deleted" rather than removing the row, so a mis-drop is
@@ -169,6 +218,7 @@ export default function ForReviewDashboard() {
       setSelected((p) => (p?.id === target.id ? null : p));
       setConfirmDelete(null);
       setPendingUndo({ applicant: target, index, prevStatus: target.status || "For Review" });
+      listsChanged();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       alert(/deleted_at|deleted_from/.test(msg)
@@ -178,7 +228,7 @@ export default function ForReviewDashboard() {
     } finally {
       setDeleting(false);
     }
-  }, [confirmDelete]);
+  }, [confirmDelete, listsChanged]);
 
   const handleUndoDelete = useCallback(async () => {
     const u = pendingUndo;
@@ -199,12 +249,13 @@ export default function ForReviewDashboard() {
         return next;
       });
       setPendingUndo(null);
+      listsChanged();
     } catch (err) {
       alert("Failed to restore: " + (err instanceof Error ? err.message : String(err)));
     } finally {
       setUndoing(false);
     }
-  }, [pendingUndo]);
+  }, [pendingUndo, listsChanged]);
 
   const dismissUndo = useCallback(() => setPendingUndo(null), []);
 
@@ -216,6 +267,8 @@ export default function ForReviewDashboard() {
   const handleApplicantChange = useCallback((updated: Applicant) => {
     setApplicants((list) => list.map((a) => (a.id === updated.id ? updated : a)));
     setSelected((p) => (p?.id === updated.id ? updated : p));
+    // The card here is already up to date; cached copies elsewhere are not
+    invalidatePaged("applicants:");
   }, []);
 
 
@@ -363,7 +416,7 @@ export default function ForReviewDashboard() {
   if (loading) return <div className="text-center py-12 text-gray-500">Loading candidates for review...</div>;
 
   return (
-    <div>
+    <div ref={rootRef} className="scroll-mt-4">
       {applicants.length === 0 ? (
         <div className="text-center py-12 bg-white rounded-lg border border-gray-200 p-8 text-gray-500">
           No candidates are pending review. Send some from the Candidates page to get started.
@@ -501,6 +554,14 @@ export default function ForReviewDashboard() {
           })}
         </div>
       )}
+
+      <Pagination
+        page={page}
+        pageCount={pageCountFor(total)}
+        total={total}
+        busy={pageLoading}
+        onChange={goToPage}
+      />
 
       {/* ── Drag ghost portal ─────────────────────────────────────────────
           Same two-div split as RecruiterDashboard:
