@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { supabase } from "@/lib/supabase";
 import SignaturePad from "@/components/SignaturePad";
+import PhotoCropper from "@/components/PhotoCropper";
 import {
   SKILL_OPTIONS, COOKING_OPTIONS, HOUSEHOLD_CHORES,
   EDUCATION_OPTIONS, CONTRACT_STATUS_OPTIONS, WE_CONTRACT_STATUS_OPTIONS,
@@ -369,6 +370,10 @@ export default function ApplicantForm() {
   const [data, setData]       = useState<FormState>(INITIAL);
   const [photo, setPhoto]     = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
+  // Photos are 1×1 only: a chosen file opens the cropper first. The original
+  // is kept so "Adjust crop" can start again from the full picture.
+  const [original, setOriginal] = useState<string | null>(null);
+  const [cropping, setCropping] = useState(false);
   const [loading, setLoading] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   // Trimmed PNG data URL from the signature pad on the final step
@@ -401,7 +406,19 @@ export default function ApplicantForm() {
   /* ── Photo ── */
   const handlePhoto = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
-    if (f) { setPhoto(f); setPreview(URL.createObjectURL(f)); }
+    e.target.value = "";   // so choosing the same file again still opens the cropper
+    if (!f) return;
+    if (!f.type.startsWith("image/")) { alert("Please choose a photo (JPG or PNG)."); return; }
+    if (original) URL.revokeObjectURL(original);
+    setOriginal(URL.createObjectURL(f));
+    setCropping(true);
+  };
+
+  const handleCropped = (file: File) => {
+    if (photo && preview) URL.revokeObjectURL(preview);
+    setPhoto(file);
+    setPreview(URL.createObjectURL(file));
+    setCropping(false);
   };
 
   /* ── Passport / visa ── */
@@ -591,10 +608,16 @@ export default function ApplicantForm() {
               <input type="file" accept="image/*" onChange={handlePhoto}
                 className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
             </div>
-            <p className="text-xs text-gray-500 leading-relaxed">
-              Upload a professional headshot.<br />JPEG or PNG accepted.
-              {editing?.photoUrl && !photo && <><br /><span className="text-gray-400">Your previous photo is kept unless you choose a new one.</span></>}
-            </p>
+            <div className="text-xs text-gray-500 leading-relaxed">
+              <p>Upload a professional headshot.<br />It must be square (1×1) — you can crop it after choosing.</p>
+              {editing?.photoUrl && !photo && <p className="text-gray-400">Your previous photo is kept unless you choose a new one.</p>}
+              {photo && original && (
+                <button type="button" onClick={() => setCropping(true)}
+                  className="mt-1.5 font-semibold text-blue-600 hover:text-blue-800">
+                  Adjust crop
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Passport & visa — optional */}
@@ -1077,6 +1100,10 @@ export default function ApplicantForm() {
         </div>
 
       </div>
+
+      {cropping && original && (
+        <PhotoCropper src={original} onCancel={() => setCropping(false)} onDone={handleCropped} />
+      )}
 
       {found && (
         <DuplicateDialog
