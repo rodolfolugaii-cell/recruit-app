@@ -4,10 +4,14 @@ import { useEffect, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
+import { roleOf } from "@/lib/roles";
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const [checkingAuth, setCheckingAuth] = useState(true);
   const [userEmail, setUserEmail] = useState<string | null>(null);
+  // Admins also get the Users page. Read fresh from Supabase rather than from
+  // the cached session, so a role change shows on the next page load.
+  const [isAdmin, setIsAdmin] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const router = useRouter();
   const pathname = usePathname();
@@ -29,6 +33,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       } else {
         setUserEmail(session.user.email || "Admin");
         setCheckingAuth(false);
+        const { data: { user } } = await supabase.auth.getUser();
+        setIsAdmin(roleOf(user) === "admin");
       }
     }
     checkUser();
@@ -55,6 +61,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     pathname === "/dashboard/trash"      ? "Trash"            :
     pathname === "/dashboard/employers"  ? "Employers"        :
     pathname === "/dashboard/contracts"  ? "Contracts"        :
+    pathname === "/dashboard/users"      ? "Users"            :
     "Application Submissions";
 
   if (checkingAuth) {
@@ -138,6 +145,14 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             {!collapsed && <span className="whitespace-nowrap">Trash</span>}
           </Link>
 
+          {/* ── Users — admins only: create and manage portal logins ─── */}
+          {isAdmin && (
+            <Link href="/dashboard/users" title="Users" className={navClass("/dashboard/users")}>
+              <span className="text-xl leading-none flex-shrink-0">👥</span>
+              {!collapsed && <span className="whitespace-nowrap">Users</span>}
+            </Link>
+          )}
+
           {/* Divider */}
           {!collapsed ? (
             <div className="px-4 py-2 text-xs font-semibold text-slate-500 uppercase tracking-wider mt-4">
@@ -198,7 +213,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             <div className="w-8 h-8 rounded-full bg-slate-800 text-white text-xs font-bold flex items-center justify-center uppercase">
               {userEmail ? userEmail.substring(0, 2) : "AD"}
             </div>
-            <span className="hidden sm:block text-sm font-medium text-gray-600">Admin</span>
+            <span className="hidden sm:block text-sm font-medium text-gray-600">{isAdmin ? "Admin" : "Recruiter"}</span>
           </div>
         </header>
 

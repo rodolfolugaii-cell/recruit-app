@@ -26,6 +26,7 @@ order**. Later files reference tables from earlier ones, so the order matters.
 | `20261104000200_employer_codes.sql` | `employers.employer_code` — the employer's own ID, typed on the employer form; kept in capitals and unique among employers not in the Trash |
 | `20261104000300_numeric_employee_codes.sql` | employee IDs become five digits (10000–99999, e.g. `43400`); converts every existing lettered ID |
 | `20261114000100_passport_visa_uploads.sql` | optional passport + visa uploads from `/apply`: `applicants.passport_path` / `visa_path`, the **private** `applicant-documents` bucket and its policies, and the two `/apply` functions updated to match |
+| `20261114000200_admin_role.sql` | makes the **first admin** — put your sign-in email in it before running. Every later admin or recruiter is created on the Users page |
 
 **They are safe to re-run and safe on the live database.** Every table is
 `CREATE TABLE IF NOT EXISTS`, every later column is a separate
@@ -88,6 +89,18 @@ NEXT_PUBLIC_SUPABASE_URL=https://yourproject.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOi...
 ```
 
-Both come from **Settings → API**. On Vercel, set the same two under
+Both come from **Settings → API**.
+
+The Users page (admins only) also needs the **service role** key, on the server
+only:
+
+```
+SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOi...
+```
+
+It is the `service_role` key under **Settings → API**. Never give it a
+`NEXT_PUBLIC_` prefix — that would ship it to every browser, and it can do
+anything to the project. Only `src/app/api/users/route.ts` reads it, and only
+after checking the caller is a signed-in admin. On Vercel, set the same two under
 **Settings → Environment Variables**, ticked for **Preview** as well as
 Production — a preview build reads the Preview values and fails without them.
