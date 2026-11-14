@@ -8,6 +8,9 @@ import {
   EDUCATION_OPTIONS, CONTRACT_STATUS_OPTIONS, WE_CONTRACT_STATUS_OPTIONS,
 } from "@/lib/applicantOptions";
 import { agesMismatch, formatAges, formatCount, kidsOf, kidsSummary } from "@/lib/kids";
+import {
+  DOCUMENT_LABELS, MAX_DOCUMENT_BYTES, uploadApplicantDocument, type DocumentKind,
+} from "@/lib/applicantDocuments";
 
 /* ── Types ──────────────────────────────────────────────────────────────── */
 interface WorkExperienceEntry {
@@ -59,6 +62,9 @@ interface PreviousApplication {
   mobile: string | null;
   photo_url: string | null;
   form_data: Record<string, unknown> | null;
+  /** Whether a passport / visa is already on file — never the files themselves */
+  has_passport?: boolean;
+  has_visa?: boolean;
 }
 
 /**
@@ -66,7 +72,14 @@ interface PreviousApplication {
  * it was found by, so those are kept exactly as they were at lookup even if the
  * applicant then corrects them in the form.
  */
-interface Editing { id: string; lookupName: string; lookupMobile: string; photoUrl: string | null; }
+interface Editing {
+  id: string; lookupName: string; lookupMobile: string; photoUrl: string | null;
+  /** Kept unless a new one is chosen — the edit only sends the documents that changed */
+  onFile: Record<DocumentKind, boolean>;
+}
+
+/** A passport or visa picked on step 1, before it is uploaded at submit */
+interface PickedDocument { file: File; preview: string }
 
 /* ── Constants ──────────────────────────────────────────────────────────── */
 const STEPS = [
@@ -272,6 +285,49 @@ function LangRow({ name, label, value, onChange }: { name: string; label: string
   );
 }
 
+/**
+ * One optional document — passport or visa. A tap opens the camera or the
+ * gallery on a phone; the chosen image previews in place and can be removed.
+ */
+function DocumentPicker({
+  kind, picked, onFile, onPick, onClear,
+}: {
+  kind: DocumentKind;
+  picked: PickedDocument | null;
+  /** Already uploaded with an earlier application */
+  onFile: boolean;
+  onPick: (f: File) => void;
+  onClear: () => void;
+}) {
+  const label = DOCUMENT_LABELS[kind];
+  return (
+    <div>
+      <p className="text-sm font-medium text-gray-700 mb-1.5">{label}</p>
+      <div className="relative h-32 rounded-lg border-2 border-dashed border-gray-300 bg-gray-50 overflow-hidden flex items-center justify-center hover:border-blue-400 transition-colors">
+        {picked ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={picked.preview} alt={label} className="h-full w-full object-contain bg-white" />
+        ) : (
+          <span className="text-xs text-gray-400 text-center px-3">
+            {onFile ? "Already uploaded — tap to replace" : "Tap to upload your " + label.toLowerCase()}
+          </span>
+        )}
+        <input
+          type="file" accept="image/*"
+          onChange={e => { const f = e.target.files?.[0]; if (f) onPick(f); e.target.value = ""; }}
+          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+          aria-label={"Upload " + label}
+        />
+      </div>
+      {picked && (
+        <button type="button" onClick={onClear} className="mt-1 text-xs text-red-500 hover:text-red-700 font-medium">
+          Remove
+        </button>
+      )}
+    </div>
+  );
+}
+
 /** Shown when the name + mobile on step 1 already has an application on file */
 function DuplicateDialog({ name, onEdit, onKeep }: { name: string; onEdit: () => void; onKeep: () => void }) {
   return (
@@ -323,6 +379,10 @@ export default function ApplicantForm() {
   const [found, setFound]         = useState<PreviousApplication | null>(null);
   const [editing, setEditing]     = useState<Editing | null>(null);
   const [keptOriginal, setKeptOriginal] = useState(false);
+  // Optional passport + visa, uploaded at submit. If an upload fails the
+  // application still goes through — the documents were never required.
+  const [docs, setDocs]           = useState<Record<DocumentKind, PickedDocument | null>>({ passport: null, visa: null });
+  const [docsFailed, setDocsFailed] = useState(false);
 
   /* ── Updaters ── */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -343,6 +403,14 @@ export default function ApplicantForm() {
     const f = e.target.files?.[0];
     if (f) { setPhoto(f); setPreview(URL.createObjectURL(f)); }
   };
+
+  /* ── Passport / visa ── */
+  const pickDocument = (kind: DocumentKind, f: File) => {
+    if (!f.type.startsWith("image/")) { alert("Please choose a photo or scan (JPG or PNG)."); return; }
+    if (f.size > MAX_DOCUMENT_BYTES) { alert("That file is larger than 10 MB. Please choose a smaller photo."); return; }
+    setDocs(d => ({ ...d, [kind]: { file: f, preview: URL.createObjectURL(f) } }));
+  };
+  const clearDocument = (kind: DocumentKind) => setDocs(d => ({ ...d, [kind]: null }));
 
   /* ── Validation ── */
   const canNext = () => {
@@ -371,7 +439,10 @@ export default function ApplicantForm() {
     setData(fromPrevious(found));
     setPhoto(null);
     setPreview(found.photo_url);
-    setEditing({ id: found.id, lookupName: data.fullName, lookupMobile: data.mobile, photoUrl: found.photo_url });
+    setEditing({
+      id: found.id, lookupName: data.fullName, lookupMobile: data.mobile, photoUrl: found.photo_url,
+      onFile: { passport: !!found.has_passport, visa: !!found.has_visa },
+    });
     setFound(null);
     setStep(0);   // stay on step 1 so they see their details come back
   };
@@ -400,6 +471,19 @@ export default function ApplicantForm() {
       if (sigErr) throw sigErr;
       signatureUrl = supabase.storage.from("applicant-photos").getPublicUrl(sigPath).data.publicUrl;
 
+      // Passport + visa — optional, so a failed upload is noted, not fatal
+      const docPaths: Partial<Record<DocumentKind, string>> = {};
+      for (const kind of ["passport", "visa"] as const) {
+        const picked = docs[kind];
+        if (!picked) continue;
+        try {
+          docPaths[kind] = await uploadApplicantDocument(picked.file, kind);
+        } catch (e) {
+          console.warn(kind + " upload failed:", e instanceof Error ? e.message : e);
+          setDocsFailed(true);
+        }
+      }
+
       const row = {
         full_name:     data.fullName,
         date_of_birth: data.dob        || null,
@@ -409,6 +493,9 @@ export default function ApplicantForm() {
         photo_url:     photoUrl         || null,
         signature_url: signatureUrl     || null,
         form_data:     toFormData(data),
+        // Only sent when uploaded, so an edit keeps the documents already on file
+        ...(docPaths.passport && { passport_path: docPaths.passport }),
+        ...(docPaths.visa     && { visa_path:     docPaths.visa }),
       };
 
       // An edit overwrites the original in place, so the first application
@@ -452,6 +539,11 @@ export default function ApplicantForm() {
               ? "Your changes have been saved to your application and will be reviewed by our team shortly."
               : "Your profile has been received and will be reviewed by our team shortly."}
           </p>
+          {docsFailed && (
+            <p className="mt-4 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 leading-relaxed">
+              Your passport or visa could not be uploaded. That is fine — our team may ask you for it later.
+            </p>
+          )}
         </div>
       </div>
     );
@@ -503,6 +595,25 @@ export default function ApplicantForm() {
               Upload a professional headshot.<br />JPEG or PNG accepted.
               {editing?.photoUrl && !photo && <><br /><span className="text-gray-400">Your previous photo is kept unless you choose a new one.</span></>}
             </p>
+          </div>
+
+          {/* Passport & visa — optional */}
+          <SectionTitle>Passport &amp; Visa (optional)</SectionTitle>
+          <p className="-mt-1 mb-3 text-xs text-gray-500 leading-relaxed">
+            If you have a visa and passport, please upload them. A clear photo of the page is fine.
+            This is <span className="font-semibold">optional</span> — you can still apply without them.
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {(["passport", "visa"] as const).map(kind => (
+              <DocumentPicker
+                key={kind}
+                kind={kind}
+                picked={docs[kind]}
+                onFile={!!editing?.onFile[kind]}
+                onPick={f => pickDocument(kind, f)}
+                onClear={() => clearDocument(kind)}
+              />
+            ))}
           </div>
 
           {/* Identity */}

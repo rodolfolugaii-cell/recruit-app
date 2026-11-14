@@ -2,14 +2,14 @@
 -- 20261104000100 — employee IDs
 --
 -- Every helper gets a short ID that a recruiter can read out over the phone or
--- write on a folder: five characters, capital letters and digits, e.g. 4K7Q2.
+-- write on a folder: five digits, 10000–99999, e.g. 43400.
 --
---   Alphabet  23456789ABCDEFGHJKLMNPQRSTUVWXYZ — 32 characters. 0/O and 1/I are
---             left out because they are mistaken for each other when read
---             aloud or handwritten.
---   Space     32^5 ≈ 33.5 million codes, so a clash is rare; when one happens
---             the generator simply draws again, and the unique index is the
---             final guarantee.
+-- (This file first handed out letters-and-digits IDs such as 4K7Q2. The
+-- generator below is the numeric one, so re-running this file never brings
+-- letters back; 20261104000300 converts any lettered IDs already given out.)
+--
+--   Space   90,000 IDs; a clash simply draws again, and the unique index is
+--           the final guarantee.
 --
 -- The code is given out by the database on insert, so /apply, the duplicate
 -- trigger and anything else that creates a helper all get one without asking.
@@ -30,14 +30,10 @@ VOLATILE
 SET search_path = public
 AS $$
 DECLARE
-  alphabet CONSTANT TEXT := '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
   code TEXT;
 BEGIN
   LOOP
-    code := '';
-    FOR i IN 1..5 LOOP
-      code := code || substr(alphabet, 1 + floor(random() * length(alphabet))::INT, 1);
-    END LOOP;
+    code := (10000 + floor(random() * 90000))::INT::TEXT;
     EXIT WHEN NOT EXISTS (SELECT 1 FROM applicants WHERE employee_code = code);
   END LOOP;
   RETURN code;

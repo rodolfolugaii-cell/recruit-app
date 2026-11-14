@@ -33,6 +33,7 @@ import { DELETED_STATUS, PHOTO_BUCKET, storagePathFromUrl } from "@/components/T
 import { employerInitials, employerTint, type Employer } from "@/lib/employers";
 import Pagination from "@/components/Pagination";
 import { invalidatePaged, pageCountFor, pageSlice } from "@/lib/pagedCache";
+import { removeApplicantDocuments } from "@/lib/applicantDocuments";
 
 interface TrashedApplicant {
   id: string;
@@ -47,6 +48,8 @@ interface TrashedApplicant {
   /** Set when /apply trashed a repeat submission — the id of the application kept */
   duplicate_of: string | null;
   employee_code: string | null;
+  passport_path: string | null;
+  visa_path: string | null;
 }
 
 type TrashedEmployer = Employer & { deleted_at: string | null };
@@ -177,7 +180,7 @@ export default function TrashDashboard() {
       const [h, e] = await Promise.all([
         supabase
           .from("applicants")
-          .select("id, created_at, full_name, nationality, gender, mobile, photo_url, deleted_at, deleted_from, duplicate_of, employee_code")
+          .select("id, created_at, full_name, nationality, gender, mobile, photo_url, deleted_at, deleted_from, duplicate_of, employee_code, passport_path, visa_path")
           .eq("status", DELETED_STATUS)
           .order("deleted_at", { ascending: false, nullsFirst: false }),
         supabase
@@ -260,6 +263,7 @@ export default function TrashDashboard() {
     try {
       if (t.kind === "helper") {
         await removeImages([t.item.photo_url]);
+        await removeApplicantDocuments([t.item.passport_path, t.item.visa_path]);
         const { error } = await supabase.from("applicants").delete().eq("id", t.item.id);
         if (error) throw error;
         setHelpers((p) => p.filter((i) => i.id !== t.item.id));
@@ -285,6 +289,7 @@ export default function TrashDashboard() {
         ...helpers.map((i) => i.photo_url),
         ...employers.flatMap((i) => [i.banner_url, i.logo_url]),
       ]);
+      await removeApplicantDocuments(helpers.flatMap((i) => [i.passport_path, i.visa_path]));
       if (helpers.length) {
         const { error } = await supabase.from("applicants").delete().eq("status", DELETED_STATUS);
         if (error) throw error;
@@ -324,7 +329,7 @@ export default function TrashDashboard() {
   ].filter(Boolean).join(" and ");
 
   const purgeBody = !purgeTarget ? "" : purgeTarget.kind === "helper"
-    ? `${purgeTarget.item.full_name} will be erased from the database, along with their photo.`
+    ? `${purgeTarget.item.full_name} will be erased from the database, along with their photo, passport and visa.`
     : `${purgeTarget.item.name} will be erased from the database, along with its banner and logo.` +
       ((linked[purgeTarget.item.id] ?? 0)
         ? ` The ${linked[purgeTarget.item.id]} helper${linked[purgeTarget.item.id] === 1 ? "" : "s"} assigned to it will be left unassigned — they are not deleted.`

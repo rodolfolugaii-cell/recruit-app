@@ -22,8 +22,10 @@ order**. Later files reference tables from earlier ones, so the order matters.
 | `20261031000100_applicant_duplicates.sql` | auto-trash of repeat applications (same name + mobile), the two `/apply` functions for editing an earlier application, and a one-time cleanup of existing duplicates |
 | `20261031000200_uppercase_names.sql` | applicant names kept in CAPITALS by a trigger, and existing names converted |
 | `20261031000300_employer_trash.sql` | `employers.deleted_at` — deleting an employer moves it to the Trash instead of erasing it |
-| `20261104000100_employee_codes.sql` | `applicants.employee_code` — a unique 5-character ID (e.g. `4K7Q2`) given to every helper on insert, and to every existing helper |
+| `20261104000100_employee_codes.sql` | `applicants.employee_code` — a unique 5-character ID given to every helper on insert, and to every existing helper |
 | `20261104000200_employer_codes.sql` | `employers.employer_code` — the employer's own ID, typed on the employer form; kept in capitals and unique among employers not in the Trash |
+| `20261104000300_numeric_employee_codes.sql` | employee IDs become five digits (10000–99999, e.g. `43400`); converts every existing lettered ID |
+| `20261114000100_passport_visa_uploads.sql` | optional passport + visa uploads from `/apply`: `applicants.passport_path` / `visa_path`, the **private** `applicant-documents` bucket and its policies, and the two `/apply` functions updated to match |
 
 **They are safe to re-run and safe on the live database.** Every table is
 `CREATE TABLE IF NOT EXISTS`, every later column is a separate
@@ -48,6 +50,11 @@ Two buckets are needed, both **public**:
 | `pdf-templates` | the rendered biodata page images, `biodata-p1.png` and `biodata-p2.png` |
 
 Create them under **Storage → New bucket** with **Public** switched on.
+
+The one exception is `applicant-documents` (passports and visas), which is
+**private** and *is* created by `20261114000100_passport_visa_uploads.sql`,
+together with its own policies. Those policies only name that new bucket, so
+they cannot clash with the ones on the two public buckets.
 
 These are deliberately not scripted. Bucket policies live in `storage.objects`,
 and generating policies here risks conflicting with the working ones you already

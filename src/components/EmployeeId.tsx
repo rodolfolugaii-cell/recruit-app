@@ -1,8 +1,8 @@
 /**
  * EmployeeId.tsx — the ID tags shown on cards and in headers.
  *
- *   EmployeeId  a helper's five-character ID, e.g. 4K7Q2 — given out by the
- *               database on insert (20261104000100_employee_codes.sql)
+ *   EmployeeId  a helper's five-digit ID, e.g. 43400 — given out by the
+ *               database on insert (20261104000100 / 20261104000300)
  *   EmployerId  an employer's own ID, typed on the employer form
  *               (20261104000200_employer_codes.sql)
  *

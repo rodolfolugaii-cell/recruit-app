@@ -24,6 +24,7 @@ import ZodiacPanel from "@/components/ZodiacPanel";
 import { kidsOf } from "@/lib/kids";
 import { EmployerPicker } from "@/components/EmployerAssign";
 import EmployeeId from "@/components/EmployeeId";
+import ApplicantDocuments from "@/components/ApplicantDocuments";
 import {
   createContract, fetchContractForApplicant, placeOfOriginFor, signingLink,
   type Contract,
@@ -57,8 +58,11 @@ export interface ProfileApplicant {
   status: string;
   /** The employer this helper is placed with — null until she is assigned. */
   employer_id?: string | null;
-  /** Five-character ID from the database, e.g. 4K7Q2 — see EmployeeId.tsx */
+  /** Five-digit ID from the database, e.g. 43400 — see EmployeeId.tsx */
   employee_code?: string | null;
+  /** Uploaded on /apply, in the private documents bucket — see lib/applicantDocuments.ts */
+  passport_path?: string | null;
+  visa_path?:     string | null;
   form_data: {
     placeOfBirth?: string;       currentLocation?: string;
     height?: string;             weight?: string;
@@ -712,6 +716,9 @@ Both links, the terms and the witnesses are on the Contracts page.`
                       </div>
                     </div>
                   </div>
+
+                  {/* ── Passport & Visa — optional uploads from /apply ── */}
+                  <ApplicantDocuments key={ap.id} passportPath={ap.passport_path} visaPath={ap.visa_path} />
                 </>
               );
             })()}

@@ -10,6 +10,7 @@ import {
 import { kidsOf } from "@/lib/kids";
 import { EmployerBadge, useEmployerDirectory } from "@/components/EmployerAssign";
 import EmployeeId from "@/components/EmployeeId";
+import ApplicantDocuments from "@/components/ApplicantDocuments";
 import Pagination from "@/components/Pagination";
 import { invalidatePaged, loadPage, needsRevalidate, pageCountFor } from "@/lib/pagedCache";
 
@@ -33,8 +34,11 @@ interface Applicant {
   status: string;
   /** The employer this helper is placed with — null until she is assigned. */
   employer_id?: string | null;
-  /** Five-character ID from the database, e.g. 4K7Q2 — see EmployeeId.tsx */
+  /** Five-digit ID from the database, e.g. 43400 — see EmployeeId.tsx */
   employee_code?: string | null;
+  /** Uploaded on /apply, in the private documents bucket — see lib/applicantDocuments.ts */
+  passport_path?: string | null;
+  visa_path?:     string | null;
   form_data: {
     placeOfBirth?: string;       currentLocation?: string;
     height?: string;             weight?: string;
@@ -1014,6 +1018,9 @@ export default function RecruiterDashboard() {
                         </div>
                       </div>
                     </div>
+
+                    {/* ── Passport & Visa — optional uploads from /apply ── */}
+                    <ApplicantDocuments key={ap.id} passportPath={ap.passport_path} visaPath={ap.visa_path} />
                   </>
                 );
               })()}
