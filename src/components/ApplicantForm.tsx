@@ -12,6 +12,9 @@ import { agesMismatch, formatAges, formatCount, kidsOf, kidsSummary } from "@/li
 import {
   DOCUMENT_LABELS, MAX_DOCUMENT_BYTES, uploadApplicantDocument, type DocumentKind,
 } from "@/lib/applicantDocuments";
+import {
+  EMPTY_NAME, SUFFIX_OPTIONS, composeFullName, namePartsOf, tidyNameParts, type NameParts,
+} from "@/lib/nameParts";
 
 /* ── Types ──────────────────────────────────────────────────────────────── */
 interface WorkExperienceEntry {
@@ -30,8 +33,8 @@ interface WorkExperienceEntry {
   familyMembers: string;
 }
 interface OtherExpEntry { country: string; yearsOfEmployment: string; jobDuties: string; }
-interface FormState {
-  fullName: string; dob: string; placeOfBirth: string; nationality: string;
+interface FormState extends NameParts {
+  dob: string; placeOfBirth: string; nationality: string;
   gender: string; mobile: string; currentLocation: string; height: string;
   weight: string; maritalStatus: string; religion: string;
   contractStatus: string; lastWorkingDay: string;
@@ -102,7 +105,7 @@ const emptyWE = (): WorkExperienceEntry => ({
 });
 
 const INITIAL: FormState = {
-  fullName: "", dob: "", placeOfBirth: "", nationality: "", gender: "",
+  ...EMPTY_NAME, dob: "", placeOfBirth: "", nationality: "", gender: "",
   mobile: "", currentLocation: "", height: "", weight: "", maritalStatus: "",
   religion: "", contractStatus: "", lastWorkingDay: "",
   boysCount: "", boysAges: "", girlsCount: "", girlsAges: "", familyMembersCount: "",
@@ -122,6 +125,8 @@ const INITIAL: FormState = {
 function toFormData(data: FormState) {
   const kids = kidsOf(data);
   return {
+    // The name as typed, part by part — full_name is built from these
+    ...tidyNameParts(data),
     placeOfBirth: data.placeOfBirth, currentLocation: data.currentLocation,
     height: data.height, weight: data.weight, maritalStatus: data.maritalStatus,
     education: data.education, religion: data.religion,
@@ -163,7 +168,9 @@ function fromPrevious(p: PreviousApplication): FormState {
 
   return {
     ...INITIAL,
-    fullName: p.full_name ?? "", dob: p.date_of_birth ?? "",
+    // An application sent before the name was split has no parts saved; the
+    // caller keeps the parts just typed on step 1 in that case
+    ...(namePartsOf(fd) ?? EMPTY_NAME), dob: p.date_of_birth ?? "",
     nationality: p.nationality ?? "", gender: p.gender ?? "", mobile: p.mobile ?? "",
     placeOfBirth: str(fd.placeOfBirth), currentLocation: str(fd.currentLocation),
     height: str(fd.height), weight: str(fd.weight),
@@ -329,6 +336,47 @@ function DocumentPicker({
   );
 }
 
+/** Which of the name / mobile on step 1 another application already uses */
+interface Conflict { name: boolean; mobile: boolean }
+
+/**
+ * Shown when the name OR the mobile is already on file but not both together —
+ * so it cannot be this person's own earlier application to edit. The form does
+ * not go on; they can only change what they typed.
+ */
+function ConflictDialog({ conflict, onClose }: { conflict: Conflict; onClose: () => void }) {
+  const what = conflict.name && conflict.mobile ? "this name and this mobile number"
+             : conflict.name ? "this name" : "this mobile number";
+  return (
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+      <div role="alertdialog" aria-modal="true" className="bg-white rounded-xl shadow-2xl border border-gray-200 max-w-sm w-full">
+        <div className="p-6">
+          <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center mb-4">
+            <svg className="w-6 h-6 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M18.364 5.636A9 9 0 105.636 18.364 9 9 0 0018.364 5.636zM5.636 5.636l12.728 12.728" />
+            </svg>
+          </div>
+          <h3 className="font-bold text-gray-900">Already on file</h3>
+          <p className="text-sm text-gray-500 mt-2 leading-relaxed">
+            We already have an application with <span className="font-semibold text-gray-700">{what}</span>.
+            Each person can apply only once, so this application cannot continue.
+          </p>
+          <p className="text-sm text-gray-500 mt-2 leading-relaxed">
+            If you applied before, enter your name and mobile number exactly as you did then to edit that
+            application. If you think this is a mistake, please contact our team.
+          </p>
+        </div>
+        <div className="px-6 py-4 bg-gray-50 border-t border-gray-100 flex justify-end">
+          <button onClick={onClose}
+            className="px-4 py-2 rounded-lg text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 transition-colors">
+            OK, go back
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /** Shown when the name + mobile on step 1 already has an application on file */
 function DuplicateDialog({ name, onEdit, onKeep }: { name: string; onEdit: () => void; onKeep: () => void }) {
   return (
@@ -384,10 +432,15 @@ export default function ApplicantForm() {
   const [found, setFound]         = useState<PreviousApplication | null>(null);
   const [editing, setEditing]     = useState<Editing | null>(null);
   const [keptOriginal, setKeptOriginal] = useState(false);
+  // The name or the mobile (not both) belongs to another application: no going on
+  const [conflict, setConflict]   = useState<Conflict | null>(null);
   // Optional passport + visa, uploaded at submit. If an upload fails the
   // application still goes through — the documents were never required.
   const [docs, setDocs]           = useState<Record<DocumentKind, PickedDocument | null>>({ passport: null, visa: null });
   const [docsFailed, setDocsFailed] = useState(false);
+
+  // "FIRST MIDDLE LAST SUFFIX" — what is saved as full_name and matched for duplicates
+  const fullName = composeFullName(data);
 
   /* ── Updaters ── */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -431,33 +484,53 @@ export default function ApplicantForm() {
 
   /* ── Validation ── */
   const canNext = () => {
-    if (step === 0) return !!((photo || editing?.photoUrl) && data.fullName && data.dob && data.nationality && data.gender && data.mobile && data.currentLocation);
+    if (step === 0) return !!((photo || editing?.photoUrl) && data.firstName.trim() && data.lastName.trim() && data.dob && data.nationality && data.gender && data.mobile && data.currentLocation);
     return true;
   };
 
   /* ── Next — leaving step 1 checks for an earlier application ──────────────
-     A failed lookup (say, the migration not run yet) never blocks a new
+     A matching name OR mobile stops the form. When BOTH match it is this
+     person's own earlier application, and they are offered to edit it; when
+     only one does, it is someone else's and the form simply will not go on.
+     While editing, their own application is left out of the check.
+     A failed check (say, the migration not run yet) never blocks a new
      applicant: the insert trigger still trashes a repeat on the way in. ── */
   const handleNext = async () => {
-    if (step === 0 && !editing) {
+    if (step === 0) {
       setChecking(true);
-      const { data: prev, error } = await supabase.rpc("find_my_application", {
-        p_name: data.fullName, p_mobile: data.mobile,
-      });
-      setChecking(false);
-      if (error) console.warn("Duplicate check failed:", error.message);
-      else if (prev) { setFound(prev as PreviousApplication); return; }
+      try {
+        const { data: hit, error } = await supabase.rpc("check_application_conflict", {
+          p_name: fullName, p_mobile: data.mobile, p_exclude: editing?.id ?? null,
+        });
+        if (error) console.warn("Duplicate check failed:", error.message);
+        const c = (hit ?? { name: false, mobile: false }) as Conflict;
+
+        // Both on file (or the new check unavailable): is it their own application?
+        if (!editing && (error || (c.name && c.mobile))) {
+          const { data: prev, error: findErr } = await supabase.rpc("find_my_application", {
+            p_name: fullName, p_mobile: data.mobile,
+          });
+          if (findErr) console.warn("Duplicate check failed:", findErr.message);
+          else if (prev) { setFound(prev as PreviousApplication); return; }
+        }
+        if (!error && (c.name || c.mobile)) { setConflict(c); return; }
+      } finally {
+        setChecking(false);
+      }
     }
     setStep(s => s + 1);
   };
 
   const editPrevious = () => {
     if (!found) return;
-    setData(fromPrevious(found));
+    const prev = fromPrevious(found);
+    // The name parts just typed are what matched, so they are kept as typed
+    const typed: NameParts = { firstName: data.firstName, middleName: data.middleName, lastName: data.lastName, suffix: data.suffix };
+    setData({ ...prev, ...typed });
     setPhoto(null);
     setPreview(found.photo_url);
     setEditing({
-      id: found.id, lookupName: data.fullName, lookupMobile: data.mobile, photoUrl: found.photo_url,
+      id: found.id, lookupName: fullName, lookupMobile: data.mobile, photoUrl: found.photo_url,
       onFile: { passport: !!found.has_passport, visa: !!found.has_visa },
     });
     setFound(null);
@@ -502,7 +575,7 @@ export default function ApplicantForm() {
       }
 
       const row = {
-        full_name:     data.fullName,
+        full_name:     fullName,
         date_of_birth: data.dob        || null,
         nationality:   data.nationality || null,
         gender:        data.gender      || null,
@@ -551,7 +624,7 @@ export default function ApplicantForm() {
           </div>
           <h2 className="text-xl font-bold text-gray-800 mb-2">{editing ? "Application Updated!" : "Application Submitted!"}</h2>
           <p className="text-sm text-gray-500 leading-relaxed">
-            Thank you, <span className="font-semibold text-gray-700">{data.fullName}</span>.{" "}
+            Thank you, <span className="font-semibold text-gray-700">{fullName}</span>.{" "}
             {editing
               ? "Your changes have been saved to your application and will be reviewed by our team shortly."
               : "Your profile has been received and will be reviewed by our team shortly."}
@@ -578,7 +651,7 @@ export default function ApplicantForm() {
           </div>
           <h2 className="text-xl font-bold text-gray-800 mb-2">Your Application Is on File</h2>
           <p className="text-sm text-gray-500 leading-relaxed">
-            Thank you, <span className="font-semibold text-gray-700">{data.fullName}</span>.
+            Thank you, <span className="font-semibold text-gray-700">{fullName}</span>.
             Your first application is already with our team, so there is no need to apply again.
           </p>
           <button onClick={() => { setKeptOriginal(false); setStep(0); }}
@@ -642,11 +715,32 @@ export default function ApplicantForm() {
           {/* Identity */}
           <SectionTitle>Identity</SectionTitle>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="md:col-span-2">
-              <label className={lbl}>Full Name *</label>
-              {/* Names are kept in capitals everywhere — the database enforces it too */}
-              <input value={data.fullName} onChange={e => set("fullName", e.target.value.toUpperCase())} type="text" required placeholder="Please enter..." className={inp} />
+            {/* Each part on its own, so the surname is never a guess. Names are
+                kept in capitals everywhere — the database enforces it too. */}
+            <div>
+              <label className={lbl}>First Name *</label>
+              <input value={data.firstName} onChange={e => set("firstName", e.target.value.toUpperCase())} type="text" required autoComplete="given-name" placeholder="e.g. MARIA" className={inp} />
             </div>
+            <div>
+              <label className={lbl}>Middle Name</label>
+              <input value={data.middleName} onChange={e => set("middleName", e.target.value.toUpperCase())} type="text" autoComplete="additional-name" placeholder="Leave blank if none" className={inp} />
+            </div>
+            <div>
+              <label className={lbl}>Last Name (Surname) *</label>
+              <input value={data.lastName} onChange={e => set("lastName", e.target.value.toUpperCase())} type="text" required autoComplete="family-name" placeholder="e.g. DELA CRUZ" className={inp} />
+            </div>
+            <div>
+              <label className={lbl}>Suffix</label>
+              <select value={data.suffix} onChange={e => set("suffix", e.target.value)} className={inp}>
+                <option value="">None</option>
+                {SUFFIX_OPTIONS.map(v => <option key={v}>{v}</option>)}
+              </select>
+            </div>
+            {fullName && (
+              <p className="md:col-span-2 -mt-2 text-xs text-gray-500">
+                Your name will appear as <span className="font-semibold text-gray-700">{fullName}</span>
+              </p>
+            )}
             <div>
               <label className={lbl}>Date of Birth *</label>
               <input value={data.dob} onChange={e => set("dob", e.target.value)} type="date" required className={inp} />
@@ -969,7 +1063,7 @@ export default function ApplicantForm() {
               <img src={preview} alt="" className="w-16 h-16 rounded-lg object-cover border border-gray-200 flex-shrink-0" />
             )}
             <div>
-              <p className="font-semibold text-gray-800">{data.fullName || "—"}</p>
+              <p className="font-semibold text-gray-800">{fullName || "—"}</p>
               <p className="text-sm text-gray-500">{[data.nationality, data.gender].filter(Boolean).join(" · ")}</p>
               <p className="text-xs text-gray-400 mt-0.5">{data.mobile}</p>
             </div>
@@ -1104,6 +1198,8 @@ export default function ApplicantForm() {
       {cropping && original && (
         <PhotoCropper src={original} onCancel={() => setCropping(false)} onDone={handleCropped} />
       )}
+
+      {conflict && <ConflictDialog conflict={conflict} onClose={() => setConflict(null)} />}
 
       {found && (
         <DuplicateDialog

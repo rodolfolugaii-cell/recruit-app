@@ -27,6 +27,7 @@ order**. Later files reference tables from earlier ones, so the order matters.
 | `20261104000300_numeric_employee_codes.sql` | employee IDs become five digits (10000–99999, e.g. `43400`); converts every existing lettered ID |
 | `20261114000100_passport_visa_uploads.sql` | optional passport + visa uploads from `/apply`: `applicants.passport_path` / `visa_path`, the **private** `applicant-documents` bucket and its policies, and the two `/apply` functions updated to match |
 | `20261114000200_admin_role.sql` | makes the **first admin** — put your sign-in email in it before running. Every later admin or recruiter is created on the Users page |
+| `20261114000300_duplicate_name_or_mobile.sql` | a repeat **name or** a repeat **mobile** now counts as a duplicate (before, both had to match): `/apply` stops on either, the insert trigger trashes either, and an edit can't take another application's name or mobile. Existing applications are not re-checked |
 
 **They are safe to re-run and safe on the live database.** Every table is
 `CREATE TABLE IF NOT EXISTS`, every later column is a separate

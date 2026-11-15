@@ -24,6 +24,7 @@ import {
   MARITAL_OPTIONS, RELIGION_OPTIONS,
 } from "@/lib/applicantOptions";
 import { agesMismatch, formatAges, formatCount, kidsOf, resolveCount } from "@/lib/kids";
+import { SUFFIX_OPTIONS, composeFullName, namePartsOf, tidyNameParts } from "@/lib/nameParts";
 
 /* ── Types (structurally match the dashboards' Applicant) ─────────────────── */
 export interface EditableWE {
@@ -40,6 +41,10 @@ export interface EditableApplicant {
   gender: string;
   mobile: string;
   form_data: {
+    // The name part by part (see lib/nameParts) — absent on applications sent
+    // before /apply split the name
+    firstName?: string;          middleName?: string;
+    lastName?: string;           suffix?: string;
     placeOfBirth?: string;       currentLocation?: string;
     height?: string;             weight?: string;
     maritalStatus?: string;      education?: string;
@@ -154,6 +159,8 @@ export default function ApplicantEditForm({
     () => JSON.parse(JSON.stringify(applicant)) as EditableApplicant
   );
   const [saving, setSaving] = useState(false);
+  // Applications sent before the name was split only have full_name
+  const [hadParts] = useState(() => namePartsOf(applicant.form_data) !== null);
 
   const fd = draft.form_data ?? {};
   const we = fd.workExperience ?? [];
@@ -191,7 +198,16 @@ export default function ApplicantEditForm({
 
   /* ── Save ── */
   const handleSave = async () => {
-    if (!draft.full_name?.trim()) { alert("Full name cannot be empty."); return; }
+    // Name: once any part is filled in, full_name is built from the parts;
+    // an older application left untouched keeps the full name it came with.
+    const parts = tidyNameParts(draft.form_data ?? {});
+    const anyPart = !!(parts.firstName || parts.middleName || parts.lastName || parts.suffix);
+    if (anyPart && (!parts.firstName || !parts.lastName)) {
+      alert("Please enter both the first name and the last name.");
+      return;
+    }
+    const fullName = anyPart ? composeFullName(parts) : (draft.full_name ?? "").trim();
+    if (!fullName) { alert("The name cannot be empty."); return; }
     setSaving(true);
     try {
       // The ages go in normalised and the total is re-derived, so a save can
@@ -199,8 +215,10 @@ export default function ApplicantEditForm({
       const kids = kidsOf(draft.form_data);
       const saved: EditableApplicant = {
         ...draft,
+        full_name: fullName,
         form_data: {
           ...draft.form_data,
+          ...(anyPart ? parts : {}),
           boysAges:     kids.boysAges,
           girlsAges:    kids.girlsAges,
           numberOfKids: kids.total,
@@ -234,8 +252,27 @@ export default function ApplicantEditForm({
         {/* ── Personal ── */}
         <Section title="Personal Details" />
         <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-          <Field label="Full Name *">
-            <input value={draft.full_name ?? ""} onChange={e => setTop("full_name", e.target.value.toUpperCase())} className={inp} />
+          {!hadParts && (
+            <p className="col-span-2 md:col-span-3 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+              This application was sent before the name was split. It is saved as{" "}
+              <span className="font-semibold">{applicant.full_name}</span>. Fill in the parts below to replace it,
+              or leave them blank to keep it as it is.
+            </p>
+          )}
+          <Field label={hadParts ? "First Name *" : "First Name"}>
+            <input value={fd.firstName ?? ""} onChange={e => setFd("firstName", e.target.value.toUpperCase())} className={inp} />
+          </Field>
+          <Field label="Middle Name">
+            <input value={fd.middleName ?? ""} onChange={e => setFd("middleName", e.target.value.toUpperCase())} className={inp} />
+          </Field>
+          <Field label={hadParts ? "Last Name (Surname) *" : "Last Name (Surname)"}>
+            <input value={fd.lastName ?? ""} onChange={e => setFd("lastName", e.target.value.toUpperCase())} className={inp} />
+          </Field>
+          <Field label="Suffix">
+            <select value={fd.suffix ?? ""} onChange={e => setFd("suffix", e.target.value)} className={inp}>
+              <option value="">None</option>
+              {SUFFIX_OPTIONS.map(v => <option key={v}>{v}</option>)}
+            </select>
           </Field>
           <Field label="Date of Birth">
             <input type="date" value={draft.date_of_birth ?? ""} onChange={e => setTop("date_of_birth", e.target.value)} className={inp} />
